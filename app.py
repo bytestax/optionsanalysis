@@ -7,8 +7,8 @@ import pandas as pd
 # ==============================
 # Setup your E*TRADE credentials
 # ==============================
-CONSUMER_KEY = "YOUR_CONSUMER_KEY"
-CONSUMER_SECRET = "YOUR_CONSUMER_SECRET"
+CONSUMER_KEY = "2f2afa11b5d616464127cb98b4efd02e"
+CONSUMER_SECRET = "a1599fb3421daca3a7adfa427c7eed9a5e184336c8583fa8286b769e3cd94ca4"
 OAUTH_TOKEN = "YOUR_OAUTH_TOKEN"
 OAUTH_TOKEN_SECRET = "YOUR_OAUTH_TOKEN_SECRET"
 
