@@ -1,6 +1,8 @@
+import streamlit as st
 import requests
 from requests_oauthlib import OAuth1
 import datetime
+import pandas as pd
 
 # ==============================
 # Setup your E*TRADE credentials
@@ -25,7 +27,7 @@ def get_option_chain(symbol: str):
     url = f"{BASE_URL}/optionchains.json"
     params = {
         "symbol": symbol,
-        "chainType": "CALLPUT",  # both calls and puts
+        "chainType": "CALLPUT",
         "includeGreeks": "true"
     }
 
@@ -34,13 +36,13 @@ def get_option_chain(symbol: str):
     return response.json()
 
 
-def filter_options(data, target_dte: int, target_delta: float):
-    """Filter options closest to target DTE and delta"""
+def parse_options(data):
+    """Parse option chain into DataFrame"""
     today = datetime.datetime.now().date()
+    rows = []
 
-    candidates = []
     if "optionPairs" not in data.get("optionChainResponse", {}):
-        return candidates
+        return pd.DataFrame()
 
     for opt in data["optionChainResponse"]["optionPairs"]:
         for contract_type in ["call", "put"]:
@@ -50,59 +52,55 @@ def filter_options(data, target_dte: int, target_delta: float):
 
             exp_date = datetime.datetime.strptime(option["expiryDate"], "%m/%d/%Y").date()
             dte = (exp_date - today).days
-            delta = float(option["greeks"]["delta"])
+            greeks = option.get("greeks", {})
 
-            # Store with deviation score
-            candidates.append({
-                "type": contract_type.upper(),
-                "symbol": option["optionSymbol"],
-                "strike": option["strikePrice"],
-                "expDate": option["expiryDate"],
-                "dte": dte,
-                "delta": delta,
-                "theta": option["greeks"]["theta"],
-                "vega": option["greeks"]["vega"],
-                "gamma": option["greeks"]["gamma"],
-                "iv": option["greeks"]["iv"],
-                "score": abs(dte - target_dte) + abs(abs(delta) - target_delta)
+            rows.append({
+                "Type": contract_type.upper(),
+                "OptionSymbol": option["optionSymbol"],
+                "Strike": option["strikePrice"],
+                "ExpDate": exp_date,
+                "DTE": dte,
+                "Delta": float(greeks.get("delta", 0)),
+                "Gamma": greeks.get("gamma"),
+                "Theta": greeks.get("theta"),
+                "Vega": greeks.get("vega"),
+                "IV": greeks.get("iv")
             })
 
-    # Sort by best match to target DTE + delta
-    candidates.sort(key=lambda x: x["score"])
-    return candidates
+    return pd.DataFrame(rows)
 
 
-def main():
-    while True:
-        symbol = input("Enter stock symbol (or 'quit'): ").upper()
-        if symbol == "QUIT":
-            break
-        try:
-            dte = int(input("Enter target DTE (e.g., 45): "))
-            delta = float(input("Enter target delta (e.g., 0.30): "))
-
-            print(f"\nFetching option chain for {symbol} ...")
-            chain_data = get_option_chain(symbol)
-
-            options = filter_options(chain_data, dte, delta)
-
-            if not options:
-                print("No options found.\n")
-                continue
-
-            print(f"\nTop matches for {symbol} (DTE≈{dte}, Δ≈{delta}):\n")
-            for opt in options[:10]:  # show top 10
-                print(f"{opt['type']:>4} {opt['symbol']} | "
-                      f"Strike: {opt['strike']} | Exp: {opt['expDate']} | "
-                      f"DTE: {opt['dte']} | Δ: {opt['delta']:.2f} | "
-                      f"Γ: {opt['gamma']:.3f} | Θ: {opt['theta']:.2f} | "
-                      f"V: {opt['vega']:.2f} | IV: {opt['iv']:.2f}")
-
-            print("\n")
-
-        except Exception as e:
-            print(f"Error: {e}\n")
+def filter_options(df, target_dte, target_delta):
+    """Filter options closest to target DTE and delta"""
+    df["Score"] = (df["DTE"] - target_dte).abs() + (df["Delta"].abs() - target_delta).abs()
+    return df.sort_values("Score")
 
 
-if __name__ == "__main__":
-    main()
+# ==============================
+# Streamlit UI
+# ==============================
+st.title("📈 E*TRADE Options Explorer")
+
+symbol = st.text_input("Enter stock symbol", value="AAPL")
+target_dte = st.number_input("Target DTE", min_value=1, max_value=365, value=45)
+target_delta = st.number_input("Target Delta", min_value=0.05, max_value=0.95, value=0.30, step=0.05)
+
+if st.button("Fetch Options"):
+    try:
+        st.write(f"Fetching option chain for **{symbol}** ...")
+        data = get_option_chain(symbol)
+        df = parse_options(data)
+
+        if df.empty:
+            st.warning("No options found.")
+        else:
+            st.subheader("📌 All Available Expirations (DTE)")
+            exp_table = df.groupby("ExpDate")["DTE"].first().reset_index()
+            st.table(exp_table)
+
+            st.subheader(f"🎯 Closest matches to DTE≈{target_dte}, Δ≈{target_delta}")
+            filtered = filter_options(df, target_dte, target_delta)
+            st.dataframe(filtered.head(20))
+
+    except Exception as e:
+        st.error(f"Error: {e}")
