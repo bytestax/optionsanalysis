@@ -6,11 +6,21 @@ from datetime import datetime
 # Polygon API Key
 API_KEY = "D2ss7P80Pm42ShCqcexGaZUD59IaKR9M"
 
+# Suggested tickers
+suggested_tickers = ["SPY", "QQQ", "AAPL", "TSLA", "SOXL", "NVDA", "MSFT", "AMD"]
+
 st.set_page_config(page_title="Options Analyzer", layout="wide")
 st.title("📊 Options Analyzer")
 
+# Dropdown + custom ticker
+st.subheader("Choose a Ticker")
+ticker_choice = st.selectbox("Pick a ticker from the list:", suggested_tickers)
+custom_symbol = st.text_input("Or enter a custom symbol:", "").upper()
+
+# Final symbol priority → custom input > dropdown
+symbol = custom_symbol if custom_symbol else ticker_choice
+
 # User inputs
-symbol = st.text_input("Enter Symbol (default: SPY)", "SPY").upper()
 min_dte = st.number_input("Min DTE", value=10)
 max_dte = st.number_input("Max DTE", value=60)
 min_delta = st.number_input("Min Delta", value=-0.30)
@@ -26,7 +36,8 @@ if st.button("Fetch Options"):
         data = response.json()
 
         if "results" not in data or not data["results"]:
-            st.warning(f"⚠️ No options available for {symbol}. Try another ticker (e.g., SPY, AAPL, TSLA).")
+            st.warning(f"⚠️ No options available for {symbol}.")
+            st.info(f"💡 Try one of these tickers instead: {', '.join(suggested_tickers)}")
         else:
             options_data = []
             for opt in data["results"]:
@@ -48,7 +59,7 @@ if st.button("Fetch Options"):
                                 "Delta": round(float(delta), 3) if delta else None,
                                 "Underlying Price": details.get("underlying_price")
                             })
-                except Exception as e:
+                except Exception:
                     continue
 
             if options_data:
@@ -56,3 +67,4 @@ if st.button("Fetch Options"):
                 st.dataframe(df)
             else:
                 st.warning(f"⚠️ No options found for {symbol} with the given filters.")
+                st.info(f"💡 Try one of these tickers instead: {', '.join(suggested_tickers)}")
