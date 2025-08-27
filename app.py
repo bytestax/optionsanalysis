@@ -6,7 +6,7 @@ import pandas as pd
 # -------------------------------
 # Load API key
 # -------------------------------
-API_KEY = GuHtoE7JtmzxOpLU_yL_RQOnF1Leliqw
+API_KEY = "GuHtoE7JtmzxOpLU_yL_RQOnF1Leliqw"
 
 BASE_URL = "https://api.polygon.io"
 
