@@ -4,7 +4,7 @@ import pandas as pd
 import datetime
 
 # ---- CONFIG ----
-API_KEY = st.secrets.get("POLYGON_API_KEY", "YOUR_API_KEY_HERE")  # use Streamlit secrets if deployed
+API_KEY = st.secrets.get("POLYGON_API_KEY", "GuHtoE7JtmzxOpLU_yL_RQOnF1Leliqw")  # use Streamlit secrets if deployed
 
 # ---- HELPERS ----
 def fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_abs_delta=True):
