@@ -4,10 +4,10 @@ import pandas as pd
 import datetime
 
 # ---- CONFIG ----
-API_KEY = st.secrets.get("POLYGON_API_KEY", "GuHtoE7JtmzxOpLU_yL_RQOnF1Leliqw")  # use Streamlit secrets if deployed
+API_KEY = st.secrets.get("POLYGON_API_KEY", "YOUR_API_KEY_HERE")  # use Streamlit secrets if deployed
 
 # ---- HELPERS ----
-def fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_abs_delta=True):
+def fetch_options_contracts(symbol, min_dte, max_dte):
     url = "https://api.polygon.io/v3/reference/options/contracts"
     today = datetime.date.today()
     start_date = today + datetime.timedelta(days=min_dte)
@@ -15,7 +15,6 @@ def fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_
 
     params = {
         "underlying_ticker": symbol,
-        "as": "",  # keep empty
         "expiration_date.gte": start_date.strftime("%Y-%m-%d"),
         "expiration_date.lte": end_date.strftime("%Y-%m-%d"),
         "limit": 1000,
@@ -38,7 +37,6 @@ def fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_
             break
 
         for c in contracts:
-            # Greeks are not included here → need a separate call
             all_contracts.append({
                 "ticker": c.get("ticker"),
                 "expiration": c.get("expiration_date"),
@@ -50,10 +48,29 @@ def fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_
         next_url = data.get("next_url")
         if not next_url:
             break
-        url = next_url + f"&apiKey={API_KEY}"  # ✅ FIX: ensure apiKey is in pagination too
+        url = next_url + f"&apiKey={API_KEY}"  # ✅ ensure apiKey for next page
         params = {}
 
     return all_contracts
+
+
+def fetch_greeks_for_contract(ticker):
+    url = f"https://api.polygon.io/v3/reference/options/contracts/{ticker}"
+    params = {"apiKey": API_KEY}
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        return {}
+    data = resp.json().get("results", {})
+    greeks = data.get("greeks", {})
+    iv = data.get("implied_volatility")
+    return {
+        "delta": greeks.get("delta"),
+        "gamma": greeks.get("gamma"),
+        "theta": greeks.get("theta"),
+        "vega": greeks.get("vega"),
+        "rho": greeks.get("rho"),
+        "iv": iv,
+    }
 
 
 # ---- STREAMLIT APP ----
@@ -68,11 +85,31 @@ use_abs_delta = st.checkbox("Use Absolute Delta (ignore sign)?", True)
 
 if st.button("Get Options Chain"):
     with st.spinner(f"Fetching contracts for {symbol} expiring between {min_dte} and {max_dte} days..."):
-        contracts = fetch_options_contracts(symbol, min_dte, max_dte, min_delta, max_delta, use_abs_delta)
+        contracts = fetch_options_contracts(symbol, min_dte, max_dte)
 
-    if contracts:
-        df = pd.DataFrame(contracts)
-        st.success(f"Total contracts pulled: {len(df)}")
-        st.dataframe(df)
+    if not contracts:
+        st.warning("No contracts found.")
     else:
-        st.warning("No contracts matched your filters.")
+        df = pd.DataFrame(contracts)
+
+        # ---- Fetch Greeks for each contract ----
+        st.info("Fetching Greeks + IV for filtered contracts...")
+        greek_data = []
+        for _, row in df.iterrows():
+            g = fetch_greeks_for_contract(row["ticker"])
+            greek_data.append(g)
+
+        greek_df = pd.DataFrame(greek_data)
+        df = pd.concat([df, greek_df], axis=1)
+
+        # ---- Apply Delta filter ----
+        if use_abs_delta:
+            df = df[df["delta"].abs().between(abs(min_delta), abs(max_delta))]
+        else:
+            df = df[df["delta"].between(min_delta, max_delta)]
+
+        if df.empty:
+            st.warning("No contracts matched delta filter.")
+        else:
+            st.success(f"Total contracts after filtering: {len(df)}")
+            st.dataframe(df)
