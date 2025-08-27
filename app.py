@@ -14,7 +14,7 @@ def fetch_options_chain(symbol):
         st.error(f"Error fetching data: {response.status_code} - {response.text}")
         return []
     data = response.json()
-    return data.get("results", {}).get("options", [])
+    return data.get("results", [])  # <- FIXED
 
 # Function to filter options
 def filter_options(options, dte_start, dte_end, delta_min, delta_max, use_abs_delta):
@@ -76,7 +76,7 @@ if st.button("Get Options Chain"):
     else:
         # Debug info
         st.write(f"✅ Total contracts pulled: {len(options)}")
-        expirations = sorted({opt.get('details', {}).get('expiration_date') for opt in options})
+        expirations = sorted({opt.get('details', {}).get('expiration_date') for opt in options if opt.get("details")})
         st.write("Available Expirations (sample):", expirations[:10])
 
         # Apply filter
@@ -87,3 +87,12 @@ if st.button("Get Options Chain"):
         else:
             df = pd.DataFrame(filtered)
             st.dataframe(df)
+
+            # CSV export
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name=f"{symbol}_options.csv",
+                mime="text/csv"
+            )
