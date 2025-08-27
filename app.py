@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 # Polygon API Key (add your key here)
-POLYGON_API_KEY = "YOUR_API_KEY"
+POLYGON_API_KEY = "GuHtoE7JtmzxOpLU_yL_RQOnF1Leliqw"
 
 BASE_URL = "https://api.polygon.io"
 
