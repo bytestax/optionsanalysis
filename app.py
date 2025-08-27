@@ -1,28 +1,23 @@
 import streamlit as st
 import requests
-from requests_oauthlib import OAuth1
+from requests_oauthlib import OAuth1Session, OAuth1
 import datetime
 import pandas as pd
 
 # ==============================
-# Setup your E*TRADE credentials
+# API endpoints
+# Sandbox URLs: use api.etrade.com for production
 # ==============================
-CONSUMER_KEY = "2f2afa11b5d616464127cb98b4efd02e"
-CONSUMER_SECRET = "a1599fb3421daca3a7adfa427c7eed9a5e184336c8583fa8286b769e3cd94ca4"
-OAUTH_TOKEN = "YOUR_OAUTH_TOKEN"
-OAUTH_TOKEN_SECRET = "YOUR_OAUTH_TOKEN_SECRET"
-
-# Sandbox URL (use live API endpoint once ready)
-BASE_URL = "https://api.etrade.com/v1/market"
-
-# Auth object
-auth = OAuth1(CONSUMER_KEY,
-              client_secret=CONSUMER_SECRET,
-              resource_owner_key=OAUTH_TOKEN,
-              resource_owner_secret=OAUTH_TOKEN_SECRET)
+REQUEST_TOKEN_URL = "https://apisb.etrade.com/oauth/request_token"
+AUTHORIZE_URL = "https://apisb.etrade.com/oauth/authorize"
+ACCESS_TOKEN_URL = "https://apisb.etrade.com/oauth/access_token"
+BASE_URL = "https://apisb.etrade.com/v1/market"
 
 
-def get_option_chain(symbol: str):
+# ==============
+# Helper methods
+# ==============
+def get_option_chain(symbol: str, auth):
     """Retrieve the option chain for a given symbol from E*TRADE API"""
     url = f"{BASE_URL}/optionchains.json"
     params = {
@@ -30,7 +25,6 @@ def get_option_chain(symbol: str):
         "chainType": "CALLPUT",
         "includeGreeks": "true"
     }
-
     response = requests.get(url, auth=auth, params=params)
     response.raise_for_status()
     return response.json()
@@ -79,28 +73,83 @@ def filter_options(df, target_dte, target_delta):
 # ==============================
 # Streamlit UI
 # ==============================
-st.title("📈 E*TRADE Options Explorer")
+st.title("📈 E*TRADE Options Explorer with OAuth")
 
-symbol = st.text_input("Enter stock symbol", value="AAPL")
-target_dte = st.number_input("Target DTE", min_value=1, max_value=365, value=45)
-target_delta = st.number_input("Target Delta", min_value=0.05, max_value=0.95, value=0.30, step=0.05)
+# Step 1: Input API keys
+st.sidebar.header("🔑 API Authentication")
+consumer_key = st.sidebar.text_input("Consumer Key")
+consumer_secret = st.sidebar.text_input("Consumer Secret", type="password")
 
-if st.button("Fetch Options"):
-    try:
-        st.write(f"Fetching option chain for **{symbol}** ...")
-        data = get_option_chain(symbol)
-        df = parse_options(data)
+if consumer_key and consumer_secret:
+    # Step 2: Get request token
+    if st.sidebar.button("Generate Authorization URL"):
+        oauth = OAuth1Session(consumer_key, client_secret=consumer_secret, callback_uri="oob")
+        try:
+            fetch_response = oauth.fetch_request_token(REQUEST_TOKEN_URL)
+            st.session_state["resource_owner_key"] = fetch_response.get("oauth_token")
+            st.session_state["resource_owner_secret"] = fetch_response.get("oauth_token_secret")
 
-        if df.empty:
-            st.warning("No options found.")
-        else:
-            st.subheader("📌 All Available Expirations (DTE)")
-            exp_table = df.groupby("ExpDate")["DTE"].first().reset_index()
-            st.table(exp_table)
+            authorization_url = oauth.authorization_url(AUTHORIZE_URL)
+            st.success("Authorization URL generated! Please open this in your browser, login, and authorize the app.")
+            st.code(authorization_url)
+        except Exception as e:
+            st.error(f"Error fetching request token: {e}")
 
-            st.subheader(f"🎯 Closest matches to DTE≈{target_dte}, Δ≈{target_delta}")
-            filtered = filter_options(df, target_dte, target_delta)
-            st.dataframe(filtered.head(20))
+    # Step 3: Enter PIN
+    verifier = st.sidebar.text_input("Enter Verifier (PIN)")
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    if verifier and "resource_owner_key" in st.session_state:
+        if st.sidebar.button("Get Access Token"):
+            try:
+                oauth = OAuth1Session(
+                    consumer_key,
+                    client_secret=consumer_secret,
+                    resource_owner_key=st.session_state["resource_owner_key"],
+                    resource_owner_secret=st.session_state["resource_owner_secret"],
+                    verifier=verifier,
+                )
+                access_tokens = oauth.fetch_access_token(ACCESS_TOKEN_URL)
+
+                st.session_state["oauth_token"] = access_tokens["oauth_token"]
+                st.session_state["oauth_token_secret"] = access_tokens["oauth_token_secret"]
+
+                st.success("✅ Access tokens generated successfully!")
+                st.json(access_tokens)
+
+            except Exception as e:
+                st.error(f"Error fetching access token: {e}")
+
+
+# Step 4: Use Access Token to fetch options
+if "oauth_token" in st.session_state:
+    st.subheader("Options Chain Explorer")
+
+    symbol = st.text_input("Enter stock symbol", value="AAPL")
+    target_dte = st.number_input("Target DTE", min_value=1, max_value=365, value=45)
+    target_delta = st.number_input("Target Delta", min_value=0.05, max_value=0.95, value=0.30, step=0.05)
+
+    if st.button("Fetch Options"):
+        try:
+            auth = OAuth1(
+                consumer_key,
+                client_secret=consumer_secret,
+                resource_owner_key=st.session_state["oauth_token"],
+                resource_owner_secret=st.session_state["oauth_token_secret"]
+            )
+
+            data = get_option_chain(symbol, auth)
+            df = parse_options(data)
+
+            if df.empty:
+                st.warning("No options found.")
+            else:
+                st.subheader("📌 All Available Expirations (DTE)")
+                exp_table = df.groupby("ExpDate")["DTE"].first().reset_index()
+                st.table(exp_table)
+
+                st.subheader(f"🎯 Closest matches to DTE≈{target_dte}, Δ≈{target_delta}")
+                filtered = filter_options(df, target_dte, target_delta)
+                st.dataframe(filtered.head(20))
+
+        except Exception as e:
+            st.error(f"Error fetching options: {e}")
