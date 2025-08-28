@@ -1,128 +1,142 @@
 import streamlit as st
 import requests
 import pandas as pd
+import matplotlib.pyplot as plt
+import time
 
-st.set_page_config(page_title="Options Analyzer", page_icon="📊", layout="wide")
-st.title("📊 Options Analyzer with Greeks & Advanced Filters")
-
-# User input
-ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
-
-# 🔑 API Key
+# =====================
+# CONFIG
+# =====================
 API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
+BASE_URL = "https://api.polygon.io/v3/snapshot/options/"
 
-# Function to fetch paginated options data
-def fetch_options_data(ticker, api_key):
-    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=100&apiKey={api_key}"
-    results = []
-    page = 0
+st.set_page_config(page_title="Options Analyzer", layout="wide")
 
-    # Progress bar
-    progress = st.progress(0.0)
+st.title("📊 Options Analyzer with Greeks (Polygon.io)")
 
-    while url:
-        page += 1
-        resp = requests.get(url)
-        data = resp.json()
-
-        if "results" in data:
-            results.extend(data["results"])
-        else:
-            break
-
-        url = data.get("next_url")
-        if url:
-            url += f"&apiKey={api_key}"
-
-        # Update progress bar (simulate progress up to 10 pages)
-        progress.progress(min(page / 10, 1.0))
-
-    progress.progress(1.0)
-    return results
-
+# =====================
+# INPUT
+# =====================
+ticker = st.text_input("Enter stock ticker:", "AAPL").upper()
+limit = st.slider("Max results per page (API limit ≤ 1000)", 10, 1000, 500)
 
 if st.button("Fetch Options Data"):
-    results = fetch_options_data(ticker, API_KEY)
+    if not ticker:
+        st.error("Please enter a ticker symbol.")
+    else:
+        progress = st.progress(0)
+        all_options = []
+        cursor = None
+        page = 0
 
-    if results:
-        # 🔀 Toggle between Raw and Cleaned
-        view_mode = st.radio("View Mode", ["Cleaned Data", "Raw Data"], horizontal=True)
+        # =====================
+        # FETCH ALL PAGES
+        # =====================
+        while True:
+            url = f"{BASE_URL}{ticker}?limit={limit}&apiKey={API_KEY}"
+            if cursor:
+                url += f"&cursor={cursor}"
 
-        if view_mode == "Raw Data":
-            st.subheader("Raw API Data")
-            st.json(results)  # show unfiltered API JSON
+            r = requests.get(url)
+            data = r.json()
 
-        else:
-            df = pd.DataFrame([{
-                "Strike": opt["details"].get("strike_price"),
-                "Expiry": opt["details"].get("expiration_date"),
-                "Type": opt["details"].get("contract_type"),
-                "Delta": (opt.get("greeks") or {}).get("delta"),
-                "Gamma": (opt.get("greeks") or {}).get("gamma"),
-                "Theta": (opt.get("greeks") or {}).get("theta"),
-                "Vega": (opt.get("greeks") or {}).get("vega"),
-                "Implied Volatility": opt.get("implied_volatility"),
-                "Last Price": (opt.get("day") or {}).get("close")
-            } for opt in results])
+            if "results" in data:
+                all_options.extend(data["results"])
+            else:
+                break
 
-            # Keep full dataset before filters
-            full_df = df.copy()
+            cursor = data.get("next_url", None)
+            page += 1
+            progress.progress(min(page * 0.1, 1.0))  # fake progress update
 
-            # 🎯 Sidebar filters
-            st.sidebar.header("Filters")
+            if not cursor:
+                break
 
-            expiry_filter = st.sidebar.multiselect("Select Expiry", sorted(full_df["Expiry"].dropna().unique()))
-            type_filter = st.sidebar.multiselect("Select Option Type", sorted(full_df["Type"].dropna().unique()))
+            time.sleep(0.5)  # avoid hitting rate limit
 
-            if not full_df["Strike"].dropna().empty:
-                min_strike, max_strike = float(full_df["Strike"].min()), float(full_df["Strike"].max())
-                strike_range = st.sidebar.slider("Select Strike Range", min_strike, max_strike, (min_strike, max_strike))
+        progress.progress(1.0)
+        st.success(f"✅ Retrieved {len(all_options)} option contracts for {ticker}")
 
-            if not full_df["Delta"].dropna().empty:
-                delta_range = st.sidebar.slider("Select Delta Range", -1.0, 1.0, (-1.0, 1.0))
+        if all_options:
+            # =====================
+            # PROCESS INTO DATAFRAME
+            # =====================
+            df = pd.DataFrame([
+                {
+                    "Contract": opt["details"]["ticker"],
+                    "Type": opt["details"]["contract_type"],
+                    "Strike": opt["details"]["strike_price"],
+                    "Expiry": opt["details"]["expiration_date"],
+                    "Delta": opt.get("greeks", {}).get("delta"),
+                    "Gamma": opt.get("greeks", {}).get("gamma"),
+                    "Theta": opt.get("greeks", {}).get("theta"),
+                    "Vega": opt.get("greeks", {}).get("vega"),
+                    "IV": opt.get("implied_volatility"),
+                    "OI": opt.get("open_interest"),
+                    "Last Price": opt["day"].get("close"),
+                    "Underlying": opt["underlying_asset"]["ticker"],
+                }
+                for opt in all_options
+            ])
 
-            if not full_df["Theta"].dropna().empty:
-                theta_min, theta_max = float(full_df["Theta"].min()), float(full_df["Theta"].max())
-                theta_range = st.sidebar.slider("Select Theta Range", theta_min, theta_max, (theta_min, theta_max))
+            # =====================
+            # FILTERS
+            # =====================
+            expiry_options = sorted(df["Expiry"].unique())
+            expiry_filter = st.multiselect("Filter by expiry:", expiry_options, default=expiry_options)
 
-            if not full_df["Implied Volatility"].dropna().empty:
-                iv_min, iv_max = float(full_df["Implied Volatility"].min()), float(full_df["Implied Volatility"].max())
-                iv_range = st.sidebar.slider("Select IV Range", iv_min, iv_max, (iv_min, iv_max))
+            type_filter = st.multiselect("Filter by contract type:", ["call", "put"], default=["call", "put"])
 
-            # Apply filters
-            df = full_df.copy()
-            if expiry_filter:
-                df = df[df["Expiry"].isin(expiry_filter)]
-            if type_filter:
-                df = df[df["Type"].isin(type_filter)]
-            if "strike_range" in locals():
-                df = df[(df["Strike"] >= strike_range[0]) & (df["Strike"] <= strike_range[1])]
-            if "delta_range" in locals():
-                df = df[(df["Delta"].fillna(0) >= delta_range[0]) & (df["Delta"].fillna(0) <= delta_range[1])]
-            if "theta_range" in locals():
-                df = df[(df["Theta"].fillna(0) >= theta_range[0]) & (df["Theta"].fillna(0) <= theta_range[1])]
-            if "iv_range" in locals():
-                df = df[(df["Implied Volatility"].fillna(0) >= iv_range[0]) & (df["Implied Volatility"].fillna(0) <= iv_range[1])]
+            strike_min, strike_max = st.slider(
+                "Strike range:", 
+                float(df["Strike"].min()), 
+                float(df["Strike"].max()), 
+                (float(df["Strike"].min()), float(df["Strike"].max()))
+            )
 
-            # Show Data
-            st.subheader("Options Data")
-            st.dataframe(df if not df.empty else full_df)
+            filtered_df = df[
+                (df["Expiry"].isin(expiry_filter)) &
+                (df["Type"].isin(type_filter)) &
+                (df["Strike"].between(strike_min, strike_max))
+            ]
 
-            # Charts
-            if not df.empty:
+            st.write(f"📌 Showing {len(filtered_df)} contracts after filtering")
+            st.dataframe(filtered_df, use_container_width=True)
+
+            # =====================
+            # PLOTS
+            # =====================
+            col1, col2 = st.columns(2)
+
+            with col1:
                 st.subheader("Delta vs Strike")
-                st.scatter_chart(df, x="Strike", y="Delta")
+                fig, ax = plt.subplots()
+                ax.scatter(filtered_df["Strike"], filtered_df["Delta"], alpha=0.6)
+                ax.set_xlabel("Strike")
+                ax.set_ylabel("Delta")
+                ax.set_title("Delta vs Strike")
+                st.pyplot(fig)
 
-                st.subheader("Average IV vs Expiry")
-                iv_by_expiry = df.groupby("Expiry")["Implied Volatility"].mean().reset_index()
-                st.line_chart(iv_by_expiry, x="Expiry", y="Implied Volatility")
+            with col2:
+                st.subheader("Average IV by Expiry")
+                iv_by_expiry = filtered_df.groupby("Expiry")["IV"].mean().reset_index()
+                fig, ax = plt.subplots()
+                ax.plot(iv_by_expiry["Expiry"], iv_by_expiry["IV"], marker="o")
+                ax.set_xlabel("Expiry")
+                ax.set_ylabel("Average IV")
+                ax.set_title("Average Implied Volatility by Expiry")
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
 
-       # Download CSV
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="Download CSV",
-    data=csv,
-    file_name="options_data.csv",
-    mime="text/csv"
-)
-
+            # =====================
+            # DOWNLOAD CSV
+            # =====================
+            csv = filtered_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name="options_data.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("No options data found.")
