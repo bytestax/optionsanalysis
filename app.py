@@ -11,7 +11,6 @@ API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 BASE_URL = "https://api.polygon.io/v3/snapshot/options/"
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
-
 st.title("📊 Options Analyzer with Greeks (Polygon.io)")
 
 # =====================
@@ -82,22 +81,40 @@ if st.button("Fetch Options Data"):
             # =====================
             # FILTERS
             # =====================
+            st.sidebar.header("🔎 Filters")
+
             expiry_options = sorted(df["Expiry"].unique())
-            expiry_filter = st.multiselect("Filter by expiry:", expiry_options, default=expiry_options)
+            expiry_filter = st.sidebar.multiselect("Expiry", expiry_options, default=expiry_options)
 
-            type_filter = st.multiselect("Filter by contract type:", ["call", "put"], default=["call", "put"])
+            type_filter = st.sidebar.multiselect("Contract Type", ["call", "put"], default=["call", "put"])
 
-            strike_min, strike_max = st.slider(
-                "Strike range:", 
-                float(df["Strike"].min()), 
-                float(df["Strike"].max()), 
+            strike_min, strike_max = st.sidebar.slider(
+                "Strike Range",
+                float(df["Strike"].min()),
+                float(df["Strike"].max()),
                 (float(df["Strike"].min()), float(df["Strike"].max()))
+            )
+
+            delta_min, delta_max = st.sidebar.slider(
+                "Delta Range",
+                float(df["Delta"].min(skipna=True) if df["Delta"].notna().any() else -1),
+                float(df["Delta"].max(skipna=True) if df["Delta"].notna().any() else 1),
+                (-1.0, 1.0)
+            )
+
+            iv_min, iv_max = st.sidebar.slider(
+                "IV Range",
+                float(df["IV"].min(skipna=True) if df["IV"].notna().any() else 0),
+                float(df["IV"].max(skipna=True) if df["IV"].notna().any() else 2),
+                (0.0, 2.0)
             )
 
             filtered_df = df[
                 (df["Expiry"].isin(expiry_filter)) &
                 (df["Type"].isin(type_filter)) &
-                (df["Strike"].between(strike_min, strike_max))
+                (df["Strike"].between(strike_min, strike_max)) &
+                (df["Delta"].between(delta_min, delta_max, inclusive="both")) &
+                (df["IV"].between(iv_min, iv_max, inclusive="both"))
             ]
 
             st.write(f"📌 Showing {len(filtered_df)} contracts after filtering")
