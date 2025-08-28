@@ -58,7 +58,8 @@ def fetch_all_options(symbol):
 
 # --- Fetch Options ---
 if st.button("Fetch Options"):
-    raw_results = fetch_all_options(symbol)
+    with st.spinner("⏳ Fetching options data from Polygon..."):
+        raw_results = fetch_all_options(symbol)
 
     if not raw_results:
         st.warning(f"⚠️ No options available for {symbol}.")
