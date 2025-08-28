@@ -21,17 +21,17 @@ symbol = custom_symbol if custom_symbol else ticker_choice
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    min_dte = st.number_input("Min DTE", value=10)
+    min_dte = st.number_input("Min DTE", value=0, min_value=0)
 with col2:
-    max_dte = st.number_input("Max DTE", value=60)
+    max_dte = st.number_input("Max DTE", value=90, min_value=1)
 with col3:
-    min_delta = st.number_input("Min Delta", value=-0.30)
+    min_delta = st.number_input("Min Delta", value=-1.0, min_value=-1.0, max_value=1.0)
 with col4:
-    max_delta = st.number_input("Max Delta", value=0.70)
+    max_delta = st.number_input("Max Delta", value=1.0, min_value=-1.0, max_value=1.0)
 
 # --- Fetch Options ---
 if st.button("Fetch Options"):
-    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?apiKey={API_KEY}"
+    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?limit=1000&apiKey={API_KEY}"
     response = requests.get(url)
 
     if response.status_code != 200:
@@ -72,12 +72,13 @@ if st.button("Fetch Options"):
                         "Vega": round(float(greeks.get("vega", 0)), 3),
                         "Underlying Price": details.get("underlying_price")
                     })
-                except Exception as e:
+                except Exception:
                     continue
 
             # Display results
             if options_data:
                 df = pd.DataFrame(options_data)
+                df = df.sort_values(by=["Expiry", "Strike"]).reset_index(drop=True)
                 st.success(f"✅ Found {len(df)} matching options for {symbol}")
                 st.dataframe(df)
             else:
