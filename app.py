@@ -8,7 +8,7 @@ st.title("📊 Options Analyzer with Greeks")
 # User input
 ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
 
-# 🔑 Fixed API Key
+# 🔑 API Key
 API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 
 # Function to fetch paginated options data
@@ -40,21 +40,32 @@ def fetch_options_data(ticker, api_key):
     progress.progress(1.0)
     return results
 
+
 if st.button("Fetch Options Data"):
     results = fetch_options_data(ticker, API_KEY)
 
     if results:
         df = pd.DataFrame([{
-            "Strike": opt["details"]["strike_price"],
-            "Expiry": opt["details"]["expiration_date"],
-            "Type": opt["details"]["contract_type"],
-            "Delta": opt.get("greeks", {}).get("delta"),
-            "Gamma": opt.get("greeks", {}).get("gamma"),
-            "Theta": opt.get("greeks", {}).get("theta"),
-            "Vega": opt.get("greeks", {}).get("vega"),
+            "Strike": opt["details"].get("strike_price"),
+            "Expiry": opt["details"].get("expiration_date"),
+            "Type": opt["details"].get("contract_type"),
+            "Delta": (opt.get("greeks") or {}).get("delta"),
+            "Gamma": (opt.get("greeks") or {}).get("gamma"),
+            "Theta": (opt.get("greeks") or {}).get("theta"),
+            "Vega": (opt.get("greeks") or {}).get("vega"),
             "Implied Volatility": opt.get("implied_volatility"),
-            "Last Price": opt.get("day", {}).get("close")
+            "Last Price": (opt.get("day") or {}).get("close")
         } for opt in results])
+
+        # 🎯 Sidebar filters
+        st.sidebar.header("Filters")
+        expiry_filter = st.sidebar.multiselect("Select Expiry", sorted(df["Expiry"].unique()))
+        type_filter = st.sidebar.multiselect("Select Option Type", sorted(df["Type"].unique()))
+
+        if expiry_filter:
+            df = df[df["Expiry"].isin(expiry_filter)]
+        if type_filter:
+            df = df[df["Type"].isin(type_filter)]
 
         # Show table
         st.subheader("Options Data")
