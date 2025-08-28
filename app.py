@@ -4,10 +4,10 @@ import pandas as pd
 from datetime import datetime
 
 # Polygon API Key
-API_KEY = "D2ss7P80Pm42ShCqcexGaZUD59IaKR9M"
+API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 
 # Suggested tickers
-suggested_tickers = ["SPY", "QQQ", "AAPL", "TSLA", "SOXL", "NVDA", "MSFT", "AMD"]
+suggested_tickers = ["SPY", "QQQ", "AAPL", "TSLA", "SOXL", "NVDA", "MSFT", "AMD","PLTR", "XSP"]
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
 st.title("📊 Options Analyzer")
