@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Options Analyzer", page_icon="📊", layout="wide")
-st.title("📊 Options Analyzer with Greeks & Filters")
+st.title("📊 Options Analyzer with Greeks & Advanced Filters")
 
 # User input
 ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
@@ -45,72 +45,78 @@ if st.button("Fetch Options Data"):
     results = fetch_options_data(ticker, API_KEY)
 
     if results:
-        df = pd.DataFrame([{
-            "Strike": opt["details"].get("strike_price"),
-            "Expiry": opt["details"].get("expiration_date"),
-            "Type": opt["details"].get("contract_type"),
-            "Delta": (opt.get("greeks") or {}).get("delta"),
-            "Gamma": (opt.get("greeks") or {}).get("gamma"),
-            "Theta": (opt.get("greeks") or {}).get("theta"),
-            "Vega": (opt.get("greeks") or {}).get("vega"),
-            "Implied Volatility": opt.get("implied_volatility"),
-            "Last Price": (opt.get("day") or {}).get("close")
-        } for opt in results])
+        # 🔀 Toggle between Raw and Cleaned
+        view_mode = st.radio("View Mode", ["Cleaned Data", "Raw Data"], horizontal=True)
 
-        # 🎯 Sidebar filters
-        st.sidebar.header("Filters")
+        if view_mode == "Raw Data":
+            st.subheader("Raw API Data")
+            st.json(results)  # show unfiltered API JSON
 
-        # Expiry filter
-        expiry_filter = st.sidebar.multiselect("Select Expiry", sorted(df["Expiry"].unique()))
+        else:
+            df = pd.DataFrame([{
+                "Strike": opt["details"].get("strike_price"),
+                "Expiry": opt["details"].get("expiration_date"),
+                "Type": opt["details"].get("contract_type"),
+                "Delta": (opt.get("greeks") or {}).get("delta"),
+                "Gamma": (opt.get("greeks") or {}).get("gamma"),
+                "Theta": (opt.get("greeks") or {}).get("theta"),
+                "Vega": (opt.get("greeks") or {}).get("vega"),
+                "Implied Volatility": opt.get("implied_volatility"),
+                "Last Price": (opt.get("day") or {}).get("close")
+            } for opt in results])
 
-        # Option type filter
-        type_filter = st.sidebar.multiselect("Select Option Type", sorted(df["Type"].unique()))
+            # Keep full dataset before filters
+            full_df = df.copy()
 
-        # Strike price range filter
-        if not df["Strike"].dropna().empty:
-            min_strike = float(df["Strike"].min())
-            max_strike = float(df["Strike"].max())
-            strike_range = st.sidebar.slider(
-                "Select Strike Range",
-                min_value=min_strike,
-                max_value=max_strike,
-                value=(min_strike, max_strike)
-            )
-            df = df[(df["Strike"] >= strike_range[0]) & (df["Strike"] <= strike_range[1])]
+            # 🎯 Sidebar filters
+            st.sidebar.header("Filters")
 
-        # Delta filter (only if delta values exist)
-        if not df["Delta"].dropna().empty:
-            delta_min = float(df["Delta"].min())
-            delta_max = float(df["Delta"].max())
-            delta_range = st.sidebar.slider(
-                "Select Delta Range",
-                min_value=-1.0,
-                max_value=1.0,
-                value=(delta_min, delta_max)
-            )
-            df = df[(df["Delta"].fillna(0) >= delta_range[0]) & (df["Delta"].fillna(0) <= delta_range[1])]
+            expiry_filter = st.sidebar.multiselect("Select Expiry", sorted(full_df["Expiry"].dropna().unique()))
+            type_filter = st.sidebar.multiselect("Select Option Type", sorted(full_df["Type"].dropna().unique()))
 
-        # Apply other filters
-        if expiry_filter:
-            df = df[df["Expiry"].isin(expiry_filter)]
-        if type_filter:
-            df = df[df["Type"].isin(type_filter)]
+            if not full_df["Strike"].dropna().empty:
+                min_strike, max_strike = float(full_df["Strike"].min()), float(full_df["Strike"].max())
+                strike_range = st.sidebar.slider("Select Strike Range", min_strike, max_strike, (min_strike, max_strike))
 
-        # Show table
-        st.subheader("Options Data")
-        st.dataframe(df)
+            if not full_df["Delta"].dropna().empty:
+                delta_range = st.sidebar.slider("Select Delta Range", -1.0, 1.0, (-1.0, 1.0))
 
-        # Charts
-        if not df.empty:
-            st.subheader("Delta vs Strike")
-            st.scatter_chart(df, x="Strike", y="Delta")
+            if not full_df["Theta"].dropna().empty:
+                theta_min, theta_max = float(full_df["Theta"].min()), float(full_df["Theta"].max())
+                theta_range = st.sidebar.slider("Select Theta Range", theta_min, theta_max, (theta_min, theta_max))
 
-            st.subheader("Average IV vs Expiry")
-            iv_by_expiry = df.groupby("Expiry")["Implied Volatility"].mean().reset_index()
-            st.line_chart(iv_by_expiry, x="Expiry", y="Implied Volatility")
+            if not full_df["Implied Volatility"].dropna().empty:
+                iv_min, iv_max = float(full_df["Implied Volatility"].min()), float(full_df["Implied Volatility"].max())
+                iv_range = st.sidebar.slider("Select IV Range", iv_min, iv_max, (iv_min, iv_max))
 
-        # Download CSV
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", csv, "options_data.csv", "text/csv")
-    else:
-        st.error("No data found. Please check the ticker or API key.")
+            # Apply filters
+            df = full_df.copy()
+            if expiry_filter:
+                df = df[df["Expiry"].isin(expiry_filter)]
+            if type_filter:
+                df = df[df["Type"].isin(type_filter)]
+            if "strike_range" in locals():
+                df = df[(df["Strike"] >= strike_range[0]) & (df["Strike"] <= strike_range[1])]
+            if "delta_range" in locals():
+                df = df[(df["Delta"].fillna(0) >= delta_range[0]) & (df["Delta"].fillna(0) <= delta_range[1])]
+            if "theta_range" in locals():
+                df = df[(df["Theta"].fillna(0) >= theta_range[0]) & (df["Theta"].fillna(0) <= theta_range[1])]
+            if "iv_range" in locals():
+                df = df[(df["Implied Volatility"].fillna(0) >= iv_range[0]) & (df["Implied Volatility"].fillna(0) <= iv_range[1])]
+
+            # Show Data
+            st.subheader("Options Data")
+            st.dataframe(df if not df.empty else full_df)
+
+            # Charts
+            if not df.empty:
+                st.subheader("Delta vs Strike")
+                st.scatter_chart(df, x="Strike", y="Delta")
+
+                st.subheader("Average IV vs Expiry")
+                iv_by_expiry = df.groupby("Expiry")["Implied Volatility"].mean().reset_index()
+                st.line_chart(iv_by_expiry, x="Expiry", y="Implied Volatility")
+
+            # Download CSV
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download CSV", csv, "options_data.csv", "
