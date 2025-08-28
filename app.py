@@ -46,10 +46,13 @@ def fetch_all_options(symbol):
         else:
             break
 
-        # handle pagination
+        # handle pagination safely
         url = data.get("next_url")
         if url:
-            url += f"&apiKey={API_KEY}"  # re-append API key for next request
+            if "apiKey" not in url:
+                url += f"&apiKey={API_KEY}"
+        else:
+            break
 
     return all_results
 
