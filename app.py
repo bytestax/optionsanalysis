@@ -117,6 +117,12 @@ if st.button("Fetch Options Data"):
                 iv_by_expiry = df.groupby("Expiry")["Implied Volatility"].mean().reset_index()
                 st.line_chart(iv_by_expiry, x="Expiry", y="Implied Volatility")
 
-            # Download CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV", csv, "options_data.csv", "
+       # Download CSV
+csv = df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="Download CSV",
+    data=csv,
+    file_name="options_data.csv",
+    mime="text/csv"
+)
+
