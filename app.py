@@ -1,106 +1,72 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
-import matplotlib.pyplot as plt
 
-# Polygon API Key
-API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
+st.title("📊 Options Analyzer with Greeks")
 
-# Suggested tickers
-suggested_tickers = ["SPY", "QQQ", "AAPL", "TSLA", "SOXL", "NVDA", "MSFT", "AMD","PLTR", "XSP"]
+# User input
+ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
 
-st.set_page_config(page_title="Options Analyzer", layout="wide")
-st.title("📊 Options Analyzer")
+# 🔑 Fixed API Key
+api_key = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 
-# Dropdown + custom ticker
-st.subheader("Choose a Ticker")
-ticker_choice = st.selectbox("Pick a ticker from the list:", suggested_tickers)
-custom_symbol = st.text_input("Or enter a custom symbol:", "").upper()
-
-# Final symbol priority → custom input > dropdown
-symbol = custom_symbol if custom_symbol else ticker_choice
-
-# User inputs
-min_dte = st.number_input("Min DTE", value=10)
-max_dte = st.number_input("Max DTE", value=60)
-min_delta = st.number_input("Min Delta", value=-0.30)
-max_delta = st.number_input("Max Delta", value=0.70)
-
-if st.button("Fetch Options"):
-    base_url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?limit=100&apiKey={API_KEY}"
-    next_url = base_url
-    options_data = []
-
-    progress = st.progress(0)
+# Function to fetch paginated options data
+def fetch_options_data(ticker, api_key):
+    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=100&apiKey={api_key}"
+    results = []
     page = 0
 
-    while next_url:
-        response = requests.get(next_url)
-        if response.status_code != 200:
-            st.error(f"⚠️ API Error {response.status_code}: {response.text}")
-            break
-
-        data = response.json()
-        results = data.get("results", [])
-
-        for opt in results:
-            try:
-                details = opt["details"]
-                greeks = opt.get("greeks", {})
-                expire_date = datetime.strptime(details["expiration_date"], "%Y-%m-%d").date()
-                dte = (expire_date - datetime.today().date()).days
-
-                if min_dte <= dte <= max_dte:
-                    delta = greeks.get("delta")
-                    if delta is not None and min_delta <= float(delta) <= max_delta:
-                        options_data.append({
-                            "Symbol": details.get("ticker"),
-                            "Type": details.get("contract_type"),
-                            "Strike": details.get("strike_price"),
-                            "Expiry": details.get("expiration_date"),
-                            "DTE": dte,
-                            "Delta": round(float(delta), 3) if delta else None,
-                            "IV": round(opt.get("implied_volatility", 0), 3),
-                            "Underlying Price": opt["underlying_asset"].get("ticker")
-                        })
-            except Exception:
-                continue
-
+    # Progress bar
+    progress = st.progress(0)
+    while url:
         page += 1
-        progress.progress(min(page * 10, 100))
+        response = requests.get(url)
+        data = response.json()
 
-        # Pagination
-        next_url = data.get("next_url")
-        if next_url:
-            if "apiKey" not in next_url:
-                next_url += f"&apiKey={API_KEY}"
+        if "results" in data:
+            results.extend(data["results"])
 
-    if options_data:
-        df = pd.DataFrame(options_data)
+        url = data.get("next_url")
+        if url:
+            url += f"&apiKey={api_key}"
+
+        # update progress bar (simulate progress)
+        progress.progress(min(page / 10, 1.0))
+
+    progress.progress(1.0)
+    return results
+
+if st.button("Fetch Options Data"):
+    results = fetch_options_data(ticker, api_key)
+
+    if results:
+        df = pd.DataFrame([{
+            "Strike": opt["details"]["strike_price"],
+            "Expiry": opt["details"]["expiration_date"],
+            "Type": opt["details"]["contract_type"],
+            "Delta": opt["greeks"]["delta"] if opt.get("greeks") else None,
+            "Gamma": opt["greeks"]["gamma"] if opt.get("greeks") else None,
+            "Theta": opt["greeks"]["theta"] if opt.get("greeks") else None,
+            "Vega": opt["greeks"]["vega"] if opt.get("greeks") else None,
+            "Implied Volatility": opt["implied_volatility"] if "implied_volatility" in opt else None,
+            "Last Price": opt["day"]["close"] if "day" in opt else None
+        } for opt in results])
+
+        # Show table
+        st.subheader("Options Data")
         st.dataframe(df)
 
-        # ---- PLOTS ----
-        st.subheader("📈 Visualizations")
+        # Scatter chart: Delta vs Strike
+        st.subheader("Delta vs Strike")
+        st.scatter_chart(df, x="Strike", y="Delta")
 
-        # Delta vs Strike
-        fig1, ax1 = plt.subplots()
-        ax1.scatter(df["Strike"], df["Delta"], alpha=0.7)
-        ax1.set_xlabel("Strike Price")
-        ax1.set_ylabel("Delta")
-        ax1.set_title("Delta vs Strike")
-        st.pyplot(fig1)
+        # Line chart: Avg IV vs Expiry
+        iv_by_expiry = df.groupby("Expiry")["Implied Volatility"].mean().reset_index()
+        st.subheader("Average IV vs Expiry")
+        st.line_chart(iv_by_expiry, x="Expiry", y="Implied Volatility")
 
-        # IV vs Expiry
-        fig2, ax2 = plt.subplots()
-        df_grouped = df.groupby("Expiry")["IV"].mean().reset_index()
-        ax2.plot(df_grouped["Expiry"], df_grouped["IV"], marker="o")
-        ax2.set_xlabel("Expiry Date")
-        ax2.set_ylabel("Avg IV")
-        ax2.set_title("Implied Volatility vs Expiry")
-        plt.xticks(rotation=45)
-        st.pyplot(fig2)
-
+        # Download CSV
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download CSV", csv, "options_data.csv", "text/csv")
     else:
-        st.warning(f"⚠️ No options found for {symbol} with the given filters.")
-        st.info(f"💡 Try one of these tickers instead: {', '.join(suggested_tickers)}")
+        st.error("No data found. Please check the ticker or API key.")
