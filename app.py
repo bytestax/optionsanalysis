@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Options Analyzer", page_icon="📊", layout="wide")
-st.title("📊 Options Analyzer with Greeks")
+st.title("📊 Options Analyzer with Greeks & Filters")
 
 # User input
 ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL")
@@ -59,9 +59,38 @@ if st.button("Fetch Options Data"):
 
         # 🎯 Sidebar filters
         st.sidebar.header("Filters")
+
+        # Expiry filter
         expiry_filter = st.sidebar.multiselect("Select Expiry", sorted(df["Expiry"].unique()))
+
+        # Option type filter
         type_filter = st.sidebar.multiselect("Select Option Type", sorted(df["Type"].unique()))
 
+        # Strike price range filter
+        if not df["Strike"].dropna().empty:
+            min_strike = float(df["Strike"].min())
+            max_strike = float(df["Strike"].max())
+            strike_range = st.sidebar.slider(
+                "Select Strike Range",
+                min_value=min_strike,
+                max_value=max_strike,
+                value=(min_strike, max_strike)
+            )
+            df = df[(df["Strike"] >= strike_range[0]) & (df["Strike"] <= strike_range[1])]
+
+        # Delta filter (only if delta values exist)
+        if not df["Delta"].dropna().empty:
+            delta_min = float(df["Delta"].min())
+            delta_max = float(df["Delta"].max())
+            delta_range = st.sidebar.slider(
+                "Select Delta Range",
+                min_value=-1.0,
+                max_value=1.0,
+                value=(delta_min, delta_max)
+            )
+            df = df[(df["Delta"].fillna(0) >= delta_range[0]) & (df["Delta"].fillna(0) <= delta_range[1])]
+
+        # Apply other filters
         if expiry_filter:
             df = df[df["Expiry"].isin(expiry_filter)]
         if type_filter:
