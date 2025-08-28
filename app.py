@@ -11,13 +11,13 @@ API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 BASE_URL = "https://api.polygon.io/v3/snapshot/options/"
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
-st.title("📊 Options Analyzer — Stable Filters & Charts")
+st.title("📊 Options Analyzer — Filters on Top")
 
 # -------------------------
 # Inputs
 # -------------------------
 ticker = st.text_input("Enter stock ticker (e.g. AAPL):", "AAPL").upper()
-limit = st.slider("Per-page limit (API supports up to 1000, keep modest to avoid rate limits)", 10, 1000, 200)
+limit = st.slider("Per-page limit", 10, 1000, 200)
 
 # Fetch button
 if st.button("Fetch Options Data"):
@@ -29,9 +29,7 @@ if st.button("Fetch Options Data"):
         next_url = f"{BASE_URL}{ticker}?limit={limit}&apiKey={API_KEY}"
         page = 0
 
-        # -------------------------
-        # Fetch loop (safe pagination)
-        # -------------------------
+        # Fetch loop
         while next_url:
             page += 1
             try:
@@ -50,15 +48,12 @@ if st.button("Fetch Options Data"):
             if results:
                 all_results.extend(results)
 
-            # handle next page url returned by API
             next_url = data.get("next_url")
-            if next_url:
-                # ensure apiKey present exactly once
-                if "apiKey=" not in next_url:
-                    next_url = next_url + f"&apiKey={API_KEY}"
-            # update progress (capped)
+            if next_url and "apiKey=" not in next_url:
+                next_url = next_url + f"&apiKey={API_KEY}"
+
             progress.progress(min(page / 10.0, 1.0))
-            time.sleep(0.2)  # tiny pause to be friendly to API
+            time.sleep(0.2)
 
         progress.progress(1.0)
         st.write(f"✅ Retrieved {len(all_results)} contracts (raw).")
@@ -66,9 +61,6 @@ if st.button("Fetch Options Data"):
         if not all_results:
             st.warning("No option contracts returned. Check ticker or API key / quota.")
         else:
-            # -------------------------
-            # Normalize into DataFrame (safe extraction)
-            # -------------------------
             rows = []
             for opt in all_results:
                 details = opt.get("details", {}) or {}
@@ -93,147 +85,85 @@ if st.button("Fetch Options Data"):
 
             df = pd.DataFrame(rows)
 
-            # -------------------------
-            # Convert numeric fields (coerce errors → NaN)
-            # -------------------------
+            # Convert numerics
             for col in ["Strike", "Delta", "Gamma", "Theta", "Vega", "IV", "OI", "Last Price"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            # keep a full copy for "show all" behavior
             full_df = df.copy()
 
             # -------------------------
-            # Sidebar filters (robust & default to "all")
+            # FILTERS ON TOP
             # -------------------------
-            st.sidebar.header("🔎 Filters (defaults = show everything)")
+            st.subheader("🔎 Filters")
 
-            # Expiry multi-select (default: all unique sorted)
-            expiry_options = sorted(full_df["Expiry"].dropna().unique().tolist())
-            expiry_filter = st.sidebar.multiselect("Expiry", expiry_options, default=expiry_options)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                expiry_options = sorted(full_df["Expiry"].dropna().unique().tolist())
+                expiry_filter = st.multiselect("Expiry", expiry_options, default=expiry_options)
 
-            # Contract type multi-select (call/put)
-            type_options = sorted(full_df["Type"].dropna().unique().tolist())
-            if not type_options:
-                type_options = ["call", "put"]
-            type_filter = st.sidebar.multiselect("Contract Type", type_options, default=type_options)
+            with col2:
+                type_options = sorted(full_df["Type"].dropna().unique().tolist())
+                if not type_options:
+                    type_options = ["call", "put"]
+                type_filter = st.multiselect("Type", type_options, default=type_options)
 
-            # Strike range slider
-            if full_df["Strike"].dropna().empty:
-                strike_range = (0.0, 0.0)
-            else:
-                strike_min = float(full_df["Strike"].min())
-                strike_max = float(full_df["Strike"].max())
-                strike_range = st.sidebar.slider("Strike Range", strike_min, strike_max, (strike_min, strike_max))
+            with col3:
+                strike_min = float(full_df["Strike"].min()) if not full_df["Strike"].dropna().empty else 0
+                strike_max = float(full_df["Strike"].max()) if not full_df["Strike"].dropna().empty else 0
+                strike_range = st.slider("Strike Range", strike_min, strike_max, (strike_min, strike_max))
 
-            # Delta range slider (if no deltas exist, default -1..1)
-            if full_df["Delta"].dropna().empty:
-                delta_default_min, delta_default_max = -1.0, 1.0
-            else:
-                delta_default_min = float(full_df["Delta"].min())
-                delta_default_max = float(full_df["Delta"].max())
-                # clamp into [-1,1]
-                delta_default_min = max(-1.0, min(1.0, delta_default_min))
-                delta_default_max = max(-1.0, min(1.0, delta_default_max))
-            delta_range = st.sidebar.slider("Delta Range", -1.0, 1.0, (delta_default_min, delta_default_max))
+            col4, col5, col6 = st.columns(3)
+            with col4:
+                delta_min = float(full_df["Delta"].min()) if not full_df["Delta"].dropna().empty else -1
+                delta_max = float(full_df["Delta"].max()) if not full_df["Delta"].dropna().empty else 1
+                delta_range = st.slider("Delta Range", -1.0, 1.0, (delta_min, delta_max))
 
-            # Theta range slider (if available)
-            if full_df["Theta"].dropna().empty:
-                theta_exists = False
-            else:
-                theta_exists = True
-                theta_min = float(full_df["Theta"].min())
-                theta_max = float(full_df["Theta"].max())
-                theta_range = st.sidebar.slider("Theta Range", theta_min, theta_max, (theta_min, theta_max))
+            with col5:
+                theta_min = float(full_df["Theta"].min()) if not full_df["Theta"].dropna().empty else -1
+                theta_max = float(full_df["Theta"].max()) if not full_df["Theta"].dropna().empty else 1
+                theta_range = st.slider("Theta Range", theta_min, theta_max, (theta_min, theta_max))
 
-            # IV range slider
-            if full_df["IV"].dropna().empty:
-                iv_default_min, iv_default_max = 0.0, float(full_df["IV"].max(skipna=True) or 2.0)
-            else:
-                iv_default_min = float(full_df["IV"].min())
-                iv_default_max = float(full_df["IV"].max())
-            iv_range = st.sidebar.slider("IV Range", float(iv_default_min), float(iv_default_max or iv_default_min + 1.0),
-                                         (float(iv_default_min), float(iv_default_max or iv_default_min + 1.0)))
+            with col6:
+                iv_min = float(full_df["IV"].min()) if not full_df["IV"].dropna().empty else 0
+                iv_max = float(full_df["IV"].max()) if not full_df["IV"].dropna().empty else 1
+                iv_range = st.slider("IV Range", iv_min, iv_max, (iv_min, iv_max))
+
+            # Quick search
+            search_query = st.text_input("Search (contract symbol or strike)", "")
 
             # -------------------------
-            # Quick search in main panel
-            # -------------------------
-            st.subheader("🔍 Quick Search (contract symbol or strike)")
-            search_query = st.text_input("", "")
-
-            # -------------------------
-            # Apply filters safely
+            # APPLY FILTERS
             # -------------------------
             filtered = full_df.copy()
 
-            # expiry & type (these default to "all" selections)
             if expiry_filter:
                 filtered = filtered[filtered["Expiry"].isin(expiry_filter)]
             if type_filter:
                 filtered = filtered[filtered["Type"].isin(type_filter)]
-
-            # strike numeric bounds
-            if "Strike" in filtered.columns and not filtered["Strike"].dropna().empty:
-                low_s, high_s = float(strike_range[0]), float(strike_range[1])
-                filtered = filtered[(filtered["Strike"] >= low_s) & (filtered["Strike"] <= high_s)]
-
-            # delta numeric bounds (use >= <= to avoid pandas version differences)
+            if not filtered["Strike"].dropna().empty:
+                filtered = filtered[(filtered["Strike"] >= strike_range[0]) & (filtered["Strike"] <= strike_range[1])]
             if "Delta" in filtered.columns:
-                dmin, dmax = float(delta_range[0]), float(delta_range[1])
-                filtered = filtered[
-                    filtered["Delta"].fillna(np.nan).apply(lambda x: True if pd.isna(x) == False and (x >= dmin and x <= dmax) else False)
-                ]
-
-            # theta
-            if theta_exists:
-                tmin, tmax = float(theta_range[0]), float(theta_range[1])
-                filtered = filtered[filtered["Theta"].fillna(np.nan).apply(lambda x: True if pd.isna(x) == False and (x >= tmin and x <= tmax) else False)]
-
-            # IV
+                filtered = filtered[(filtered["Delta"] >= delta_range[0]) & (filtered["Delta"] <= delta_range[1])]
+            if "Theta" in filtered.columns:
+                filtered = filtered[(filtered["Theta"] >= theta_range[0]) & (filtered["Theta"] <= theta_range[1])]
             if "IV" in filtered.columns:
-                ivmin, ivmax = float(iv_range[0]), float(iv_range[1])
-                filtered = filtered[filtered["IV"].fillna(np.nan).apply(lambda x: True if pd.isna(x) == False and (x >= ivmin and x <= ivmax) else False)]
+                filtered = filtered[(filtered["IV"] >= iv_range[0]) & (filtered["IV"] <= iv_range[1])]
 
-            # search (safe; handle NaNs)
             if search_query:
-                q = str(search_query).strip().lower()
+                q = str(search_query).lower()
                 filtered = filtered[
                     filtered["Contract"].fillna("").str.lower().str.contains(q) |
                     filtered["Strike"].fillna("").astype(str).str.contains(q)
                 ]
 
             # -------------------------
-            # Show results & charts
+            # RESULTS
             # -------------------------
             st.write(f"📌 Showing {len(filtered)} contracts (after filters). Full dataset size: {len(full_df)}")
             st.dataframe(filtered.reset_index(drop=True), use_container_width=True)
 
-            # Charts (only if filtered non-empty)
-            if not filtered.empty:
-                # Delta vs Strike (Streamlit scatter)
-                st.subheader("Delta vs Strike")
-                # prepare tidy df for the chart (drop NaNs)
-                dscatter = filtered.dropna(subset=["Strike", "Delta"])[["Strike", "Delta"]]
-                if not dscatter.empty:
-                    st.scatter_chart(dscatter.rename(columns={"Strike": "x", "Delta": "y"}), x="x", y="y")
-                else:
-                    st.info("No Strike+Delta pairs available for scatter chart.")
-
-                # Avg IV vs Expiry
-                st.subheader("Average IV by Expiry")
-                iv_by_expiry = filtered.dropna(subset=["IV"]).groupby("Expiry")["IV"].mean().reset_index()
-                if not iv_by_expiry.empty:
-                    iv_by_expiry = iv_by_expiry.set_index("Expiry")
-                    st.line_chart(iv_by_expiry)
-                else:
-                    st.info("No IV data available for line chart.")
-
-            else:
-                st.info("No contracts match the selected filters.")
-
-            # -------------------------
-            # CSV Download (safe)
-            # -------------------------
+            # CSV Download
             csv = filtered.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="Download CSV",
