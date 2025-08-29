@@ -124,9 +124,12 @@ if st.button("Get Options Chain"):
         st.error("Polygon API Key required (sidebar).")
         st.stop()
 
-    # First fetch contracts within ~90 days to discover expirations
+    # Handle index options prefix for Polygon
+    query_symbol = f"I:{symbol}" if symbol in ["SPX", "XSP"] else symbol
+
+    # First fetch contracts within ~180 days to discover expirations
     try:
-        contracts = fetch_contracts(symbol, iso_from_dte(0), iso_from_dte(90))
+        contracts = fetch_contracts(query_symbol, iso_from_dte(0), iso_from_dte(180))
     except Exception as e:
         st.error(f"Failed to fetch contracts: {e}")
         st.stop()
@@ -156,7 +159,7 @@ if st.button("Get Options Chain"):
     # Get underlying price (prev close)
     prev_close = None
     try:
-        r = requests.get(f"{BASE}/v2/aggs/ticker/{symbol}/prev", params={"apiKey": POLYGON_API_KEY}, timeout=20)
+        r = requests.get(f"{BASE}/v2/aggs/ticker/{query_symbol}/prev", params={"apiKey": POLYGON_API_KEY}, timeout=20)
         if r.status_code == 200:
             res = r.json().get("results") or []
             if res:
@@ -223,7 +226,7 @@ if st.button("Get Options Chain"):
         left_index=True, right_index=True, how="outer", suffixes=("_call","_put")
     ).reset_index().sort_values("strike")
 
-    st.subheader(f"Options Chain for {symbol} (Expiration {selected_expiry})")
+    st.subheader(f"Options Chain for {symbol} (Expiration {selected_expiry}, {calc_dte(selected_expiry)} DTE)")
     st.dataframe(merged, use_container_width=True)
 
     if enable_download:
