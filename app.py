@@ -20,6 +20,7 @@ POLYGON_API_KEY = st.sidebar.text_input("Polygon API Key", type="password", valu
 
 BASE = "https://api.polygon.io"
 
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -32,10 +33,7 @@ def calc_dte(exp_iso: str) -> int:
 
 
 def fetch_contracts(symbol: str, start_iso: str, end_iso: str, page_limit: int = 20, page_size: int = 1000) -> List[dict]:
-    """
-    Fetch contracts from /v3/reference/options/contracts with pagination.
-    Always ensures apiKey is present (pagination next_url also gets apiKey appended).
-    """
+    """Fetch option contracts for given symbol and expiration window"""
     url = f"{BASE}/v3/reference/options/contracts"
     params = {
         "underlying_ticker": symbol,
@@ -58,17 +56,13 @@ def fetch_contracts(symbol: str, start_iso: str, end_iso: str, page_limit: int =
         next_url = js.get("next_url")
         if not next_url:
             break
-        # ensure apiKey is on next page
-        url = next_url if next_url.lower().find("apikey=") >= 0 else f"{next_url}&apiKey={POLYGON_API_KEY}"
+        url = next_url if "apikey=" in next_url.lower() else f"{next_url}&apiKey={POLYGON_API_KEY}"
         pages += 1
 
     return results
 
 
 async def _fetch_snapshot(client: httpx.AsyncClient, ticker: str, sem: asyncio.Semaphore):
-    """
-    Fetch snapshot for a single option ticker (returns None on failure).
-    """
     url = f"{BASE}/v3/snapshot/options/{ticker}"
     async with sem:
         try:
@@ -82,10 +76,7 @@ async def _fetch_snapshot(client: httpx.AsyncClient, ticker: str, sem: asyncio.S
 
 
 async def fetch_snapshots_concurrent(tickers: List[str], concurrency: int = 12) -> dict:
-    """
-    Fetch snapshots for many tickers concurrently with a bound on concurrency.
-    Returns dict: { ticker: snapshot_json_or_None }
-    """
+    """Fetch snapshots concurrently for many tickers"""
     results = {}
     sem = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient() as client:
@@ -101,30 +92,29 @@ async def fetch_snapshots_concurrent(tickers: List[str], concurrency: int = 12) 
 # -------------------------
 st.title("📊 Options Chain Explorer (Polygon)")
 
-col1, col2, col3 = st.columns([1.2, 1, 1])
-with col1:
-    symbol = st.text_input("Symbol", value="SPY").strip().upper()
-with col2:
-    min_dte = st.number_input("Min DTE", min_value=0, value=30, step=1)
-with col3:
-    max_dte = st.number_input("Max DTE", min_value=0, value=60, step=1)
+# Symbol selector
+symbols = ["SPX", "XSP", "TQQQ", "QQQ", "PLTR", "SOXL", "AAPL", "TSLA"]
+symbol = st.selectbox("Symbol", symbols, index=0)
+custom_symbol = st.text_input("Or type another symbol").strip().upper()
+if custom_symbol:
+    symbol = custom_symbol
 
-col4, col5, col6 = st.columns([1, 1, 1])
-with col4:
-    min_delta = st.number_input("Min Delta", value=-0.30, format="%.2f")
-with col5:
-    max_delta = st.number_input("Max Delta", value=0.30, format="%.2f")
-with col6:
-    use_abs_delta = st.checkbox("Use Absolute Delta (ignore sign)?", value=True)
+# Delta range
+col1, col2 = st.columns(2)
+with col1:
+    min_delta = st.number_input("Min Delta (absolute)", min_value=1, max_value=100, value=5, step=1)
+with col2:
+    max_delta = st.number_input("Max Delta (absolute)", min_value=1, max_value=100, value=35, step=1)
 
 st.markdown("---")
-c1, c2, c3 = st.columns([1, 1, 1])
+c1, c2, c3 = st.columns(3)
 with c1:
-    max_snapshot = st.number_input("Max contracts to fetch Greeks for", min_value=10, max_value=2000, value=400, step=10)
+    max_snapshot = st.number_input("Max contracts to fetch Greeks for", min_value=50, max_value=2000, value=400, step=50)
 with c2:
     concurrency = st.number_input("Concurrent snapshot requests", min_value=4, max_value=48, value=12, step=1)
 with c3:
     enable_download = st.checkbox("Enable CSV download", value=True)
+
 
 # -------------------------
 # Main button
@@ -134,44 +124,36 @@ if st.button("Get Options Chain"):
         st.error("Polygon API Key required (sidebar).")
         st.stop()
 
-    # compute date window
-    start_iso = iso_from_dte(min_dte)
-    end_iso = iso_from_dte(max_dte)
-    st.info(f"Fetching contracts for {symbol} with expirations between {start_iso} and {end_iso} ...")
-
+    # First fetch contracts within ~90 days to discover expirations
     try:
-        contracts = fetch_contracts(symbol, start_iso, end_iso)
-    except PermissionError as pe:
-        st.error(str(pe))
-        st.stop()
+        contracts = fetch_contracts(symbol, iso_from_dte(0), iso_from_dte(90))
     except Exception as e:
         st.error(f"Failed to fetch contracts: {e}")
         st.stop()
 
-    st.success(f"Total contracts returned: {len(contracts)}")
-
     if not contracts:
-        st.warning("No option contracts returned for that DTE window.")
+        st.warning("No option contracts returned for that symbol.")
         st.stop()
 
-    # Build DataFrame and compute DTE
     df_contracts = pd.DataFrame(contracts)
-    # Keep only calls/puts and rows with strike and ticker
     df_contracts = df_contracts[df_contracts["contract_type"].isin(["call", "put"])]
-    df_contracts = df_contracts[df_contracts["strike_price"].notnull() & df_contracts["ticker"].notnull()].copy()
     df_contracts["dte"] = df_contracts["expiration_date"].apply(calc_dte)
 
-    # Keep only rows inside DTE window (defensive)
-    df_contracts = df_contracts[(df_contracts["dte"] >= min_dte) & (df_contracts["dte"] <= max_dte)]
+    expiries = sorted(df_contracts["expiration_date"].unique(), key=lambda x: calc_dte(x))
+    expiry_labels = [f"{e} ({calc_dte(e)} DTE)" for e in expiries]
+    closest_index = min(range(len(expiries)), key=lambda i: abs(calc_dte(expiries[i]) - 45))
+
+    exp_choice = st.selectbox("Choose Expiration", expiry_labels, index=closest_index)
+    selected_expiry = expiries[expiry_labels.index(exp_choice)]
+
+    # Filter contracts for chosen expiry
+    df_contracts = df_contracts[df_contracts["expiration_date"] == selected_expiry].copy()
 
     if df_contracts.empty:
-        st.warning("After computing DTE, no contracts fall in your chosen window.")
+        st.warning("No contracts found for selected expiration.")
         st.stop()
 
-    st.write(f"Contracts after DTE filter: {len(df_contracts)}")
-
-    # Sort by proximity to ATM (we use prev close if available)
-    # Attempt to get previous close for ATM; fallback to median strike
+    # Get underlying price (prev close)
     prev_close = None
     try:
         r = requests.get(f"{BASE}/v2/aggs/ticker/{symbol}/prev", params={"apiKey": POLYGON_API_KEY}, timeout=20)
@@ -180,36 +162,30 @@ if st.button("Get Options Chain"):
             if res:
                 prev_close = float(res[0]["c"])
     except Exception:
-        prev_close = None
+        pass
 
     center = prev_close if prev_close is not None else float(df_contracts["strike_price"].median())
-    st.write(f"Using center strike ≈ {center:.2f} to pick nearest contracts to fetch Greeks (prev close used if available).")
+    st.write(f"Using center strike ≈ {center:.2f}")
 
-    # Pick nearest contracts by strike (both calls and puts) up to max_snapshot
+    # Pick nearest contracts
     df_contracts["abs_dist"] = (df_contracts["strike_price"].astype(float) - center).abs()
     df_candidates = df_contracts.sort_values("abs_dist").head(int(max_snapshot)).copy()
-    st.write(f"Will fetch Greeks for {len(df_candidates)} contracts (top nearest to center).")
 
-    # Prepare tickers to fetch
     tickers = df_candidates["ticker"].tolist()
-
-    # Concurrently fetch snapshots (greeks, iv)
-    with st.spinner("Fetching Greeks & IV for selected contracts (concurrent)..."):
+    with st.spinner("Fetching Greeks & IV ..."):
         try:
             snapshots = asyncio.run(fetch_snapshots_concurrent(tickers, concurrency=int(concurrency)))
         except Exception as e:
             st.error(f"Snapshot fetching failed: {e}")
             st.stop()
 
-    # Build merged results
     rows = []
     for _, row in df_candidates.iterrows():
         t = row["ticker"]
         snap = snapshots.get(t)
         greeks = (snap or {}).get("greeks", {}) if snap else {}
         iv = (snap or {}).get("implied_volatility") if snap else None
-        # use underlying_price if snapshot provides it, else prev_close
-        underlying_price = (snap or {}).get("underlying_price") if snap else None
+        underlying_price = (snap or {}).get("underlying_price") if snap else prev_close
 
         rows.append({
             "ticker": t,
@@ -220,45 +196,38 @@ if st.button("Get Options Chain"):
             "delta": greeks.get("delta"),
             "gamma": greeks.get("gamma"),
             "theta": greeks.get("theta"),
-            "vega": greeks.get("vega"),
-            "rho": greeks.get("rho"),
             "iv": iv,
-            "underlying_price": underlying_price if underlying_price is not None else prev_close
+            "underlying_price": underlying_price
         })
 
-    df_final = pd.DataFrame(rows)
-
-    # Drop rows without delta (no greeks available)
-    before = len(df_final)
-    df_final = df_final.dropna(subset=["delta"])
-    after = len(df_final)
-    st.write(f"Snapshots returned with greeks: {after}/{before}")
+    df_final = pd.DataFrame(rows).dropna(subset=["delta"])
 
     if df_final.empty:
-        st.warning("No greeks returned for the selected candidates. Try increasing 'Max contracts to fetch Greeks for' or check subscription.")
+        st.warning("No greeks returned. Try increasing max contracts.")
         st.stop()
 
-    # Apply delta filters (signed or absolute)
-    if use_abs_delta:
-        mask = (df_final["delta"].abs() >= abs(min_delta)) & (df_final["delta"].abs() <= abs(max_delta))
-    else:
-        mask = (df_final["delta"] >= min_delta) & (df_final["delta"] <= max_delta)
-
-    df_filtered = df_final[mask].sort_values(["expiration", "strike", "type"]).reset_index(drop=True)
+    # Apply delta filter (absolute, scaled to %)
+    df_final["abs_delta"] = (df_final["delta"].abs() * 100).round(1)
+    df_filtered = df_final[(df_final["abs_delta"] >= min_delta) & (df_final["abs_delta"] <= max_delta)]
 
     if df_filtered.empty:
-        st.warning("No options matched your delta filter. Try widening delta range or increasing max contracts to fetch greeks for.")
-        # still show available greeks to help debug
-        st.subheader("Greeks returned (unfiltered)")
-        st.dataframe(df_final.sort_values(["expiration", "strike", "type"]).reset_index(drop=True))
+        st.warning("No options matched your delta filter.")
         st.stop()
 
-    # Display results
-    st.subheader("Filtered Options (with Greeks & IV)")
-    st.dataframe(df_filtered, use_container_width=True)
+    # Split into calls and puts
+    calls = df_filtered[df_filtered["type"] == "call"].set_index("strike")
+    puts = df_filtered[df_filtered["type"] == "put"].set_index("strike")
+
+    merged = calls[["delta","iv","gamma","theta","ticker"]].merge(
+        puts[["delta","iv","gamma","theta","ticker"]],
+        left_index=True, right_index=True, how="outer", suffixes=("_call","_put")
+    ).reset_index().sort_values("strike")
+
+    st.subheader(f"Options Chain for {symbol} (Expiration {selected_expiry})")
+    st.dataframe(merged, use_container_width=True)
 
     if enable_download:
-        csv = df_filtered.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", csv, file_name=f"{symbol}_options_filtered.csv", mime="text/csv")
+        csv = merged.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CSV", csv, file_name=f"{symbol}_{selected_expiry}_options.csv", mime="text/csv")
 
-    st.success(f"Done — displayed {len(df_filtered)} contracts (greeks fetched for {len(tickers)} candidates).")
+    st.success(f"Done — displayed {len(merged)} strikes.")
