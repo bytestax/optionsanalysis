@@ -30,8 +30,14 @@ def fetch_snapshots(symbol):
         st.error(f"Snapshot error: {r.text}")
         return {}
     results = r.json().get("results", [])
-    # Convert list → dict keyed by contract ticker
-    return {item["details"]["contract_name"]: item for item in results}
+    # Convert list → dict keyed by contract ticker (if available)
+    snapshot_dict = {}
+    for item in results:
+        details = item.get("details", {})
+        contract_name = details.get("contract_name")
+        if contract_name:  # only keep valid ones
+            snapshot_dict[contract_name] = item
+    return snapshot_dict
 
 # ==========================
 # DATAFRAME BUILDER
