@@ -16,39 +16,60 @@ st.title("📊 Options Analyzer")
 # -------------------------------
 ticker = st.text_input("Enter Stock Ticker (e.g. AAPL, TSLA, SPX)", "AAPL")
 
+
+# -------------------------------
+# Function: Fetch All Options
+# -------------------------------
+def fetch_all_options(symbol, api_key, per_page=250):
+    all_results = []
+    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?apiKey={api_key}&limit={per_page}"
+    while url:
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            st.error(f"API Error {resp.status_code}: {resp.text}")
+            return pd.DataFrame()
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            break
+        all_results.extend(results)
+        # Polygon doesn’t always provide "next_url"
+        url = data.get("next_url")
+        if url:
+            url += f"&apiKey={api_key}"
+    return pd.DataFrame(all_results)
+
+
 # -------------------------------
 # Data Fetch
 # -------------------------------
 if st.button("Fetch Options Data"):
     with st.spinner("Fetching data..."):
-        url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={API_KEY}&limit=250"
-        response = requests.get(url)
+        raw_df = fetch_all_options(ticker, API_KEY)
 
-        if response.status_code == 200:
-            data = response.json()
-            if "results" in data:
-                df = pd.DataFrame([
-                    {
-                        "Contract": opt["details"]["ticker"],
-                        "Type": opt["details"]["contract_type"],
-                        "Strike": opt["details"]["strike_price"],
-                        "Expiration": opt["details"]["expiration_date"],
-                        "Delta": opt.get("greeks", {}).get("delta"),
-                        "Gamma": opt.get("greeks", {}).get("gamma"),
-                        "Theta": opt.get("greeks", {}).get("theta"),
-                        "Vega": opt.get("greeks", {}).get("vega"),
-                        "IV": opt.get("implied_volatility"),
-                        "OI": opt.get("open_interest"),
-                        "Last Price": opt["day"].get("close"),
-                        "Volume": opt["day"].get("volume"),
-                    }
-                    for opt in data["results"]
-                ])
-                st.session_state["options_df"] = df
-            else:
-                st.error("No options data available for this ticker.")
+        if not raw_df.empty:
+            # Normalize clean DataFrame
+            df = pd.DataFrame([
+                {
+                    "Contract": opt.get("details", {}).get("ticker"),
+                    "Type": opt.get("details", {}).get("contract_type"),
+                    "Strike": opt.get("details", {}).get("strike_price"),
+                    "Expiration": opt.get("details", {}).get("expiration_date"),
+                    "Delta": opt.get("greeks", {}).get("delta"),
+                    "Gamma": opt.get("greeks", {}).get("gamma"),
+                    "Theta": opt.get("greeks", {}).get("theta"),
+                    "Vega": opt.get("greeks", {}).get("vega"),
+                    "IV": opt.get("implied_volatility"),
+                    "OI": opt.get("open_interest"),
+                    "Last Price": opt.get("day", {}).get("close"),
+                    "Volume": opt.get("day", {}).get("volume"),
+                }
+                for opt in raw_df.to_dict(orient="records")
+            ])
+            st.session_state["options_df"] = df
         else:
-            st.error(f"API Error {response.status_code}: {response.text}")
+            st.warning(f"No options data available for {ticker}. Try another symbol.")
+
 
 # -------------------------------
 # Filters + Display
@@ -73,7 +94,7 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
         if series.dropna().empty:
             return None, None
         min_val, max_val = float(series.min()), float(series.max())
-        if min_val == max_val:  # expand if flat
+        if min_val == max_val:
             min_val -= default_padding
             max_val += default_padding
         return st.slider(label, min_val, max_val, (min_val, max_val))
@@ -102,21 +123,23 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
     # Results
     # -------------------------------
     st.subheader("📋 Filtered Options Chain")
-    st.dataframe(filtered, use_container_width=True)
+    if filtered.empty:
+        st.warning("No contracts match your filter settings.")
+    else:
+        st.dataframe(filtered, use_container_width=True)
 
-    # Download CSV
-    csv = filtered.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Download CSV",
-        data=csv,
-        file_name="options_data.csv",
-        mime="text/csv"
-    )
+        # Download CSV
+        csv = filtered.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name=f"{ticker}_options.csv",
+            mime="text/csv"
+        )
 
-    # -------------------------------
-    # Visualization
-    # -------------------------------
-    if not filtered.empty:
+        # -------------------------------
+        # Visualization
+        # -------------------------------
         st.subheader("📈 Greeks Visualization")
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.scatter(filtered["Strike"], filtered["Delta"], label="Delta", color="blue", alpha=0.6)
@@ -128,37 +151,37 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
         ax.legend()
         st.pyplot(fig)
 
-    # -------------------------------
-    # Strategy (PCR)
-    # -------------------------------
-    def strategy_section(df):
-        calls = df[df["Type"] == "call"]
-        puts = df[df["Type"] == "put"]
+        # -------------------------------
+        # Strategy (PCR)
+        # -------------------------------
+        def strategy_section(df):
+            calls = df[df["Type"] == "call"]
+            puts = df[df["Type"] == "put"]
 
-        total_call_oi = calls["OI"].sum()
-        total_put_oi = puts["OI"].sum()
-        total_call_vol = calls["Volume"].sum()
-        total_put_vol = puts["Volume"].sum()
+            total_call_oi = calls["OI"].sum()
+            total_put_oi = puts["OI"].sum()
+            total_call_vol = calls["Volume"].sum()
+            total_put_vol = puts["Volume"].sum()
 
-        pcr_oi = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else None
-        pcr_vol = round(total_put_vol / total_call_vol, 2) if total_call_vol > 0 else None
+            pcr_oi = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else None
+            pcr_vol = round(total_put_vol / total_call_vol, 2) if total_call_vol > 0 else None
 
-        st.subheader("📌 Market Strategy Insights")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Put/Call Ratio (OI)", pcr_oi if pcr_oi else "N/A")
-        with col2:
-            st.metric("Put/Call Ratio (Volume)", pcr_vol if pcr_vol else "N/A")
+            st.subheader("📌 Market Strategy Insights")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Put/Call Ratio (OI)", pcr_oi if pcr_oi else "N/A")
+            with col2:
+                st.metric("Put/Call Ratio (Volume)", pcr_vol if pcr_vol else "N/A")
 
-        # Strategy logic
-        if pcr_oi is not None:
-            if pcr_oi < 0.7:
-                st.success("📈 Bullish Bias → Consider **Bull Call Spread / Short Puts**")
-            elif 0.7 <= pcr_oi <= 1.3:
-                st.info("⚖️ Neutral Bias → Consider **Iron Condor / Straddle**")
+            if pcr_oi is not None:
+                if pcr_oi < 0.7:
+                    st.success("📈 Bullish Bias → Consider **Bull Call Spread / Short Puts**")
+                elif 0.7 <= pcr_oi <= 1.3:
+                    st.info("⚖️ Neutral Bias → Consider **Iron Condor / Straddle**")
+                else:
+                    st.error("📉 Bearish Bias → Consider **Bear Put Spread / Short Calls**")
             else:
-                st.error("📉 Bearish Bias → Consider **Bear Put Spread / Short Calls**")
-        else:
-            st.warning("⚠️ PCR could not be calculated (missing OI data).")
+                st.warning("⚠️ PCR could not be calculated (missing OI data).")
 
-    strategy_section(filtered)
+        strategy_section(filtered)
+
