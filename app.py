@@ -26,9 +26,12 @@ if ticker:
         if "results" in exp_data:
             expiries = sorted(set([opt["expiration_date"] for opt in exp_data["results"]]))
             if expiries:
-                # Default DTE ~ 45
-                expiry_filter = st.selectbox("Expiration (DTE)", expiries, 
-                                             index=min(len(expiries)-1, expiries.index(min(expiries, key=lambda x: abs((pd.to_datetime(x)-pd.Timestamp.today()).days-45)))))
+                # Default ~45 DTE
+                expiry_filter = st.selectbox(
+                    "Expiration (DTE)", expiries, 
+                    index=min(len(expiries)-1, 
+                              expiries.index(min(expiries, key=lambda x: abs((pd.to_datetime(x)-pd.Timestamp.today()).days-45))))
+                )
             else:
                 st.warning("No expirations found.")
     else:
@@ -42,49 +45,59 @@ with col2:
     max_delta = st.number_input("Max Delta", value=35)
 
 # ---------------- FETCH OPTION CHAIN ----------------
+def fetch_all_options(symbol):
+    """Fetch all option snapshots using pagination (limit=250)."""
+    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?apiKey={API_KEY}&limit=250"
+    results = []
+    while url:
+        r = requests.get(url)
+        if r.status_code != 200:
+            st.error(f"API Error {r.status_code}: {r.text}")
+            return []
+        data = r.json()
+        results.extend(data.get("results", []))
+        url = data.get("next_url")  # pagination
+        if url:
+            url += f"&apiKey={API_KEY}"  # append key
+    return results
+
 if st.button("Get Option Chain") and expiry_filter:
     with st.spinner("Fetching option chain..."):
-        url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={API_KEY}&limit=1000"
-        response = requests.get(url)
+        options_data = fetch_all_options(ticker)
 
-        if response.status_code == 200:
-            data = response.json()
-            if "results" in data:
-                df = pd.DataFrame([
-                    {
-                        "Contract": opt["details"]["ticker"],
-                        "Type": opt["details"]["contract_type"],
-                        "Strike": opt["details"]["strike_price"],
-                        "Expiration": opt["details"]["expiration_date"],
-                        "Delta": abs(opt.get("greeks", {}).get("delta", 0)),
-                        "Gamma": opt.get("greeks", {}).get("gamma"),
-                        "Theta": opt.get("greeks", {}).get("theta"),
-                        "Vega": opt.get("greeks", {}).get("vega"),
-                        "IV": opt.get("implied_volatility"),
-                        "Last Price": opt["day"].get("close"),
-                    }
-                    for opt in data["results"]
-                    if opt["details"]["expiration_date"] == expiry_filter
-                ])
+        if options_data:
+            df = pd.DataFrame([
+                {
+                    "Contract": opt["details"]["ticker"],
+                    "Type": opt["details"]["contract_type"],
+                    "Strike": opt["details"]["strike_price"],
+                    "Expiration": opt["details"]["expiration_date"],
+                    "Delta": abs(opt.get("greeks", {}).get("delta", 0) * 100),  # % delta
+                    "Gamma": opt.get("greeks", {}).get("gamma"),
+                    "Theta": opt.get("greeks", {}).get("theta"),
+                    "Vega": opt.get("greeks", {}).get("vega"),
+                    "IV": opt.get("implied_volatility"),
+                    "Last Price": opt["day"].get("close"),
+                }
+                for opt in options_data
+                if opt["details"]["expiration_date"] == expiry_filter
+            ])
 
-                # Apply delta filter
-                df = df[(df["Delta"]*100 >= min_delta) & (df["Delta"]*100 <= max_delta)]
+            # Apply delta filter
+            df = df[(df["Delta"] >= min_delta) & (df["Delta"] <= max_delta)]
 
-                # Split calls and puts
-                calls = df[df["Type"] == "call"].set_index("Strike")
-                puts = df[df["Type"] == "put"].set_index("Strike")
+            # Split calls and puts
+            calls = df[df["Type"] == "call"].set_index("Strike")
+            puts = df[df["Type"] == "put"].set_index("Strike")
 
-                # Align side by side
-                merged = pd.concat([calls, puts], axis=1, keys=["Call", "Put"])
+            # Align side by side
+            merged = pd.concat([calls, puts], axis=1, keys=["Call", "Put"])
 
-                st.subheader(f"📋 Options Chain for {ticker} - {expiry_filter}")
-                st.dataframe(merged, use_container_width=True)
+            st.subheader(f"📋 Options Chain for {ticker} - {expiry_filter}")
+            st.dataframe(merged, use_container_width=True)
 
-                # Download CSV
-                csv = merged.to_csv().encode("utf-8")
-                st.download_button("Download CSV", csv, f"{ticker}_options_chain.csv", "text/csv")
-
-            else:
-                st.error("No options data available.")
+            # Download CSV
+            csv = merged.to_csv().encode("utf-8")
+            st.download_button("Download CSV", csv, f"{ticker}_options_chain.csv", "text/csv")
         else:
-            st.error(f"API Error {response.status_code}: {response.text}")
+            st.error("No options data available.")
