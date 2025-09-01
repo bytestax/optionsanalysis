@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
+import time
 
 # -------------------------------
 # App Config
@@ -18,12 +19,29 @@ ticker = st.text_input("Enter Stock Ticker (e.g. AAPL, TSLA, SPX)", "AAPL")
 
 
 # -------------------------------
-# Function: Fetch All Options
+# Function: Validate Symbol
+# -------------------------------
+def validate_symbol(symbol, api_key):
+    url = f"https://api.polygon.io/v3/reference/options/symbols?ticker={symbol}&apiKey={api_key}"
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        return False
+    data = resp.json()
+    return len(data.get("results", [])) > 0
+
+
+# -------------------------------
+# Function: Fetch All Options (with progress bar)
 # -------------------------------
 def fetch_all_options(symbol, api_key, per_page=250):
     all_results = []
     url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?apiKey={api_key}&limit={per_page}"
+
+    progress_bar = st.progress(0)
+    step = 0
+
     while url:
+        step += 1
         resp = requests.get(url)
         if resp.status_code != 200:
             st.error(f"API Error {resp.status_code}: {resp.text}")
@@ -33,10 +51,20 @@ def fetch_all_options(symbol, api_key, per_page=250):
         if not results:
             break
         all_results.extend(results)
-        # Polygon doesn’t always provide "next_url"
+
+        # Update progress bar (fake since total unknown)
+        progress_bar.progress(min(step * 0.1, 1.0))  # increases 10% each page
+
+        # Polygon may give a "next_url"
         url = data.get("next_url")
         if url:
             url += f"&apiKey={api_key}"
+        else:
+            break
+
+        time.sleep(0.2)  # be polite to API
+
+    progress_bar.empty()
     return pd.DataFrame(all_results)
 
 
@@ -44,31 +72,35 @@ def fetch_all_options(symbol, api_key, per_page=250):
 # Data Fetch
 # -------------------------------
 if st.button("Fetch Options Data"):
-    with st.spinner("Fetching data..."):
-        raw_df = fetch_all_options(ticker, API_KEY)
-
-        if not raw_df.empty:
-            # Normalize clean DataFrame
-            df = pd.DataFrame([
-                {
-                    "Contract": opt.get("details", {}).get("ticker"),
-                    "Type": opt.get("details", {}).get("contract_type"),
-                    "Strike": opt.get("details", {}).get("strike_price"),
-                    "Expiration": opt.get("details", {}).get("expiration_date"),
-                    "Delta": opt.get("greeks", {}).get("delta"),
-                    "Gamma": opt.get("greeks", {}).get("gamma"),
-                    "Theta": opt.get("greeks", {}).get("theta"),
-                    "Vega": opt.get("greeks", {}).get("vega"),
-                    "IV": opt.get("implied_volatility"),
-                    "OI": opt.get("open_interest"),
-                    "Last Price": opt.get("day", {}).get("close"),
-                    "Volume": opt.get("day", {}).get("volume"),
-                }
-                for opt in raw_df.to_dict(orient="records")
-            ])
-            st.session_state["options_df"] = df
+    with st.spinner("Validating symbol..."):
+        if not validate_symbol(ticker, API_KEY):
+            st.error(f"❌ No options chain available for symbol '{ticker}'. Try another.")
         else:
-            st.warning(f"No options data available for {ticker}. Try another symbol.")
+            with st.spinner("Fetching data..."):
+                raw_df = fetch_all_options(ticker, API_KEY)
+
+                if not raw_df.empty:
+                    # Normalize clean DataFrame
+                    df = pd.DataFrame([
+                        {
+                            "Contract": opt.get("details", {}).get("ticker"),
+                            "Type": opt.get("details", {}).get("contract_type"),
+                            "Strike": opt.get("details", {}).get("strike_price"),
+                            "Expiration": opt.get("details", {}).get("expiration_date"),
+                            "Delta": opt.get("greeks", {}).get("delta"),
+                            "Gamma": opt.get("greeks", {}).get("gamma"),
+                            "Theta": opt.get("greeks", {}).get("theta"),
+                            "Vega": opt.get("greeks", {}).get("vega"),
+                            "IV": opt.get("implied_volatility"),
+                            "OI": opt.get("open_interest"),
+                            "Last Price": opt.get("day", {}).get("close"),
+                            "Volume": opt.get("day", {}).get("volume"),
+                        }
+                        for opt in raw_df.to_dict(orient="records")
+                    ])
+                    st.session_state["options_df"] = df
+                else:
+                    st.warning(f"No options data available for {ticker}. Try another symbol.")
 
 
 # -------------------------------
@@ -184,4 +216,3 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
                 st.warning("⚠️ PCR could not be calculated (missing OI data).")
 
         strategy_section(filtered)
-
