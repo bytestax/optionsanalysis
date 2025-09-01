@@ -1,135 +1,146 @@
 import streamlit as st
-import requests
 import pandas as pd
-import matplotlib.pyplot as plt
-import time
+import requests
+import asyncio
+import aiohttp
+
+# 🔑 Your Polygon.io API Key
+API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
 
-API_KEY = "f0UIbp9U2Ba1MSTnQjess6ZDsuEqygbu"
+# ---------------------------
+# Async fetch for snapshots
+# ---------------------------
+async def fetch_snapshot(session, url):
+    try:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            else:
+                return None
+    except:
+        return None
 
+async def fetch_snapshots(contracts, progress):
+    results = []
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for contract in contracts:
+            url = f"https://api.polygon.io/v3/snapshot/options/{contract}?apiKey={API_KEY}"
+            tasks.append(fetch_snapshot(session, url))
+        for i, task in enumerate(asyncio.as_completed(tasks)):
+            result = await task
+            if result:
+                results.append(result)
+            progress.progress((i+1)/len(tasks))
+    return results
+
+# ---------------------------
+# Fetch Options Contracts
+# ---------------------------
+def get_options_chain(symbol):
+    url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=1000&apiKey={API_KEY}"
+    r = requests.get(url)
+    if r.status_code != 200:
+        return pd.DataFrame()
+    data = r.json().get("results", [])
+    if not data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data)
+    return df
+
+# ---------------------------
+# Streamlit UI
+# ---------------------------
 st.title("📊 Options Analyzer")
 
-# Input ticker
-ticker = st.text_input("Enter Stock Ticker (e.g. AAPL, TSLA, SPX)", "AAPL")
+symbol = st.text_input("Enter Stock Ticker (e.g. AAPL, TSLA, SPX)", "")
 
-# Fetch button
 if st.button("Fetch Options Data"):
-    progress = st.progress(0, text="Initializing fetch...")
+    if not symbol:
+        st.error("Please enter a stock ticker")
+    else:
+        with st.spinner("Fetching contracts..."):
+            df = get_options_chain(symbol.upper())
 
-    with st.spinner("Fetching options data..."):
-        try:
-            url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={API_KEY}&limit=250"
-            response = requests.get(url)
-            progress.progress(25, text="Contacting Polygon API...")
-
-            if response.status_code == 200:
-                data = response.json()
-                progress.progress(50, text="Processing data...")
-
-                if "results" in data and data["results"]:
-                    df = pd.DataFrame([
-                        {
-                            "Contract": opt["details"]["ticker"],
-                            "Type": opt["details"]["contract_type"],
-                            "Strike": opt["details"]["strike_price"],
-                            "Expiration": opt["details"]["expiration_date"],
-                            "Delta": opt.get("greeks", {}).get("delta"),
-                            "Gamma": opt.get("greeks", {}).get("gamma"),
-                            "Theta": opt.get("greeks", {}).get("theta"),
-                            "Vega": opt.get("greeks", {}).get("vega"),
-                            "IV": opt.get("implied_volatility"),
-                            "OI": opt.get("open_interest"),
-                            "Last Price": opt["day"].get("close") if "day" in opt else None,
-                            "Volume": opt["day"].get("volume") if "day" in opt else None,
-                        }
-                        for opt in data["results"]
-                    ])
-                    st.session_state["options_df"] = df
-                    progress.progress(100, text="Data loaded successfully ✅")
-                else:
-                    st.error(f"❌ No options chain available for symbol '{ticker.upper()}'. Try another.")
-                    progress.empty()
-            else:
-                st.error(f"API Error {response.status_code}: {response.text}")
-                progress.empty()
-
-        except Exception as e:
-            st.error(f"⚠️ Failed to fetch data: {e}")
-            progress.empty()
-
-# Filtering & visualization
-if "options_df" in st.session_state and not st.session_state["options_df"].empty:
-    df = st.session_state["options_df"]
-
-    st.subheader("🔎 Filter Options")
-
-    # Filters on top bar
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        expiries = df["Expiration"].dropna().unique()
-        expiry_filter = st.selectbox("Expiration", ["All"] + sorted(expiries.tolist()))
-
-    with col2:
-        type_filter = st.selectbox("Type", ["All", "call", "put"])
-
-    with col3:
-        min_strike, max_strike = st.slider("Strike Range",
-                                           float(df["Strike"].min(skipna=True)),
-                                           float(df["Strike"].max(skipna=True)),
-                                           (float(df["Strike"].min(skipna=True)),
-                                            float(df["Strike"].max(skipna=True))))
-
-    with col4:
-        # Handle NaN safely
-        if df["Delta"].dropna().empty:
-            min_delta, max_delta = -1, 1
+        if df.empty:
+            st.error(f"No options chain available for symbol '{symbol.upper()}'. Try another.")
         else:
-            min_delta, max_delta = st.slider("Delta Range",
-                                             float(df["Delta"].min(skipna=True)),
-                                             float(df["Delta"].max(skipna=True)),
-                                             (float(df["Delta"].min(skipna=True)),
-                                              float(df["Delta"].max(skipna=True))))
+            st.success(f"Found {len(df)} contracts for {symbol.upper()}")
 
-    # Apply filters
-    filtered = df.copy()
+            # UI Filters
+            expirations = ["All"] + sorted(df["expiration_date"].dropna().unique().tolist())
+            exp_filter = st.selectbox("Expiration", expirations)
+            types = ["All", "call", "put"]
+            type_filter = st.selectbox("Type", types)
 
-    if expiry_filter != "All":
-        filtered = filtered[filtered["Expiration"] == expiry_filter]
+            min_strike, max_strike = st.slider(
+                "Strike Range",
+                min_value=int(df["strike_price"].min()),
+                max_value=int(df["strike_price"].max()),
+                value=(int(df["strike_price"].min()), int(df["strike_price"].max())),
+                step=1
+            )
 
-    if type_filter != "All":
-        filtered = filtered[filtered["Type"] == type_filter]
+            # Apply filters
+            fdf = df.copy()
+            if exp_filter != "All":
+                fdf = fdf[fdf["expiration_date"] == exp_filter]
+            if type_filter != "All":
+                fdf = fdf[fdf["type"] == type_filter]
+            fdf = fdf[(fdf["strike_price"] >= min_strike) & (fdf["strike_price"] <= max_strike)]
 
-    filtered = filtered[(filtered["Strike"] >= min_strike) & (filtered["Strike"] <= max_strike)]
+            if fdf.empty:
+                st.warning("No contracts match your filters.")
+            else:
+                st.write(f"Fetching snapshot data for {len(fdf)} contracts...")
 
-    if "Delta" in filtered and not filtered["Delta"].dropna().empty:
-        filtered = filtered[(filtered["Delta"] >= min_delta) & (filtered["Delta"] <= max_delta)]
+                # Progress bar
+                progress = st.progress(0)
 
-    # Show results
-    st.subheader("📋 Filtered Options Chain")
-    st.dataframe(filtered, use_container_width=True)
+                # Fetch snapshots
+                contracts = fdf["ticker"].tolist()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                snapshots = loop.run_until_complete(fetch_snapshots(contracts, progress))
 
-    # Download CSV
-    csv = filtered.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Download CSV",
-        data=csv,
-        file_name=f"{ticker.upper()}_options.csv",
-        mime="text/csv"
-    )
+                # Merge snapshot data
+                rows = []
+                for snap in snapshots:
+                    try:
+                        data = snap.get("results", {})
+                        if not data:
+                            continue
+                        rows.append({
+                            "Contract": data.get("details", {}).get("ticker"),
+                            "Type": data.get("details", {}).get("contract_type"),
+                            "Strike": data.get("details", {}).get("strike_price"),
+                            "Expiration": data.get("details", {}).get("expiration_date"),
+                            "Delta": data.get("greeks", {}).get("delta"),
+                            "Gamma": data.get("greeks", {}).get("gamma"),
+                            "Theta": data.get("greeks", {}).get("theta"),
+                            "Vega": data.get("greeks", {}).get("vega"),
+                            "IV": data.get("implied_volatility"),
+                            "OI": data.get("open_interest"),
+                            "Last Price": data.get("last_quote", {}).get("bid") or data.get("last_quote", {}).get("ask"),
+                            "Volume": data.get("day", {}).get("volume")
+                        })
+                    except:
+                        continue
 
-    # Visualization
-    if not filtered.empty:
-        st.subheader("📈 Greeks Visualization")
+                if rows:
+                    outdf = pd.DataFrame(rows)
+                    st.subheader("📑 Filtered Options Chain")
+                    st.dataframe(outdf, use_container_width=True)
 
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.scatter(filtered["Strike"], filtered["Delta"], label="Delta", color="blue", alpha=0.6)
-        ax.scatter(filtered["Strike"], filtered["Gamma"], label="Gamma", color="red", alpha=0.6)
-        ax.scatter(filtered["Strike"], filtered["Theta"], label="Theta", color="green", alpha=0.6)
-        ax.scatter(filtered["Strike"], filtered["Vega"], label="Vega", color="orange", alpha=0.6)
-
-        ax.set_xlabel("Strike Price")
-        ax.set_ylabel("Value")
-        ax.legend()
-        st.pyplot(fig)
+                    # Download button
+                    csv = outdf.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="📥 Download CSV",
+                        data=csv,
+                        file_name=f"{symbol.upper()}_options_chain.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.error("No snapshot data could be fetched for these contracts.")
