@@ -89,7 +89,6 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
         strike_range = st.slider("Strike Range", min_strike, max_strike, (min_strike, max_strike))
 
     with col4:
-        # Defensive defaults for Delta
         min_delta, max_delta = float(df["Delta"].min()), float(df["Delta"].max())
         if min_delta == max_delta:
             min_delta, max_delta = -1.0, 1.0
@@ -104,22 +103,58 @@ if "options_df" in st.session_state and not st.session_state["options_df"].empty
     filtered = filtered[(filtered["Strike"] >= strike_range[0]) & (filtered["Strike"] <= strike_range[1])]
     filtered = filtered[(filtered["Delta"] >= delta_range[0]) & (filtered["Delta"] <= delta_range[1])]
 
-    # Show results
-    st.subheader("📋 Filtered Options Chain")
-    st.dataframe(filtered, use_container_width=True)
+    # ----------------------------
+    # Helper function: Summary Stats
+    # ----------------------------
+    def summary_section(data, title):
+        st.markdown(f"### 📊 {title} Summary")
+        if data.empty:
+            st.info("No data available.")
+            return
+        max_oi = data.loc[data["OI"].idxmax()] if data["OI"].sum() > 0 else None
+        max_vol = data.loc[data["Volume"].idxmax()] if data["Volume"].sum() > 0 else None
+        atm = data.iloc[(data["Strike"] - data["Strike"].mean()).abs().argsort()[:1]] if not data.empty else None
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if max_oi is not None:
+                st.metric("Max OI", f"{max_oi['Contract']}", f"OI={int(max_oi['OI'])}")
+        with col2:
+            if max_vol is not None:
+                st.metric("Max Volume", f"{max_vol['Contract']}", f"Vol={int(max_vol['Volume'])}")
+        with col3:
+            if atm is not None and not atm.empty:
+                st.metric("ATM Option", atm.iloc[0]["Contract"], f"Strike={atm.iloc[0]['Strike']}")
+
+    # ----------------------------
+    # Tabs for Call & Put
+    # ----------------------------
+    st.subheader("📋 Options Chain by Type")
+    tab1, tab2, tab3 = st.tabs(["📈 Calls", "📉 Puts", "📊 All Options"])
+
+    with tab1:
+        calls = filtered[filtered["Type"] == "call"]
+        summary_section(calls, "Calls")
+        st.dataframe(calls, use_container_width=True)
+        if not calls.empty:
+            st.scatter_chart(calls, x="Strike", y=["Delta", "Gamma", "Theta", "Vega"])
+
+    with tab2:
+        puts = filtered[filtered["Type"] == "put"]
+        summary_section(puts, "Puts")
+        st.dataframe(puts, use_container_width=True)
+        if not puts.empty:
+            st.scatter_chart(puts, x="Strike", y=["Delta", "Gamma", "Theta", "Vega"])
+
+    with tab3:
+        summary_section(filtered, "All Options")
+        st.dataframe(filtered, use_container_width=True)
+        if not filtered.empty:
+            st.scatter_chart(filtered, x="Strike", y=["Delta", "Gamma", "Theta", "Vega"])
 
     # Download CSV
     csv = filtered.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv, file_name="options_data.csv", mime="text/csv")
-
-    # Visualization
-    if not filtered.empty:
-        st.subheader("📈 Greeks Visualization")
-        st.scatter_chart(
-            filtered,
-            x="Strike",
-            y=["Delta", "Gamma", "Theta", "Vega"]
-        )
 
 # ----------------------------
 # SPX special note
